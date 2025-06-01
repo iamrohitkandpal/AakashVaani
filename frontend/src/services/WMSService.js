@@ -182,6 +182,84 @@ class WMSService {
       }
     };
   }
-}
+  getAllLayers() {
+    return Array.from(this.wmsLayers.entries()).map(([id, layer]) => ({
+      id,
+      ...layer
+    }));
+  }
 
-export default WMSService;
+  getLayersByCategory(category) {
+    return this.getAllLayers().filter(layer => layer.category === category);
+  }
+
+  getCategories() {
+    const categories = new Set();
+    this.wmsLayers.forEach(layer => categories.add(layer.category));
+    return Array.from(categories).map(category => ({
+      id: category,
+      name: this.capitalizeCategoryName(category),
+      layers: this.getLayersByCategory(category)
+    }));
+  }
+
+  capitalizeCategoryName(category) {
+    return category.split('_').map(word => 
+      word.charAt(0).toUpperCase() + word.slice(1)
+    ).join(' ');
+  }
+
+  // Voice command integration for layer detection
+  detectLayerFromCommand(command) {
+    const normalized = command.toLowerCase();
+    
+    // Direct layer name matches
+    for (const [id, layer] of this.wmsLayers) {
+      if (normalized.includes(layer.name.toLowerCase()) || 
+          normalized.includes(id.replace('_', ' '))) {
+        return id;
+      }
+    }
+
+    // Keyword-based detection
+    if (normalized.includes('satellite') || normalized.includes('imagery') || normalized.includes('aerial')) {
+      return 'esri_world_imagery';
+    }
+    if (normalized.includes('weather') || normalized.includes('rain') || normalized.includes('precipitation')) {
+      return 'openweather_precipitation';
+    }
+    if (normalized.includes('cloud')) {
+      return 'openweather_clouds';
+    }
+    if (normalized.includes('elevation') || normalized.includes('terrain') || normalized.includes('topographic')) {
+      return 'stamen_terrain';
+    }
+    if (normalized.includes('dark') || normalized.includes('night')) {
+      return 'cartodb_dark_matter';
+    }
+    if (normalized.includes('light') || normalized.includes('clean')) {
+      return 'cartodb_positron';
+    }
+    if (normalized.includes('nasa')) {
+      return 'nasa_modis_terra';
+    }
+    if (normalized.includes('usgs') || normalized.includes('geological')) {
+      return 'usgs_elevation';
+    }
+
+    return null;
+  }
+
+  // Get layer information for voice feedback
+  getLayerInfo(layerId) {
+    const layer = this.getLayer(layerId);
+    return layer ? {
+      name: layer.name,
+      description: layer.description,
+      category: layer.category,
+      icon: layer.icon
+    } : null;
+  }
+
+// Create and export singleton instance
+export const wmsService = new WMSService();
