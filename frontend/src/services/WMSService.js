@@ -261,5 +261,7 @@ class WMSService {
     } : null;
   }
 
+}
+
 // Create and export singleton instance
 export const wmsService = new WMSService();
