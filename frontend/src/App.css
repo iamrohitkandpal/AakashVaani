@@ -358,6 +358,164 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* Layer Switcher */
+.layer-switcher {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(15, 15, 35, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 12px;
+  padding: 1rem;
+  border: 2px solid #00ff88;
+  box-shadow: 0 8px 32px rgba(0, 255, 136, 0.2);
+  z-index: 1000;
+}
+
+.layer-switcher-title {
+  color: #00ff88;
+  font-weight: 600;
+  margin-bottom: 0.8rem;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.layer-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.layer-button {
+  padding: 0.6rem 1rem;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid #333;
+  border-radius: 8px;
+  color: #ccc;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  white-space: nowrap;
+}
+
+.layer-button:hover {
+  border-color: #00ff88;
+  color: #00ff88;
+  background: rgba(0, 255, 136, 0.1);
+}
+
+.layer-button.active {
+  background: rgba(0, 255, 136, 0.2);
+  border-color: #00ff88;
+  color: #00ff88;
+  font-weight: 600;
+}
+
+/* Voice Listening Overlay */
+.voice-listening-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 255, 136, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500;
+  pointer-events: none;
+}
+
+.listening-indicator {
+  text-align: center;
+  color: #00ff88;
+  position: relative;
+}
+
+.pulse-ring {
+  width: 100px;
+  height: 100px;
+  border: 3px solid #00ff88;
+  border-radius: 50%;
+  animation: pulse-ring 2s ease-out infinite;
+  margin: 0 auto 1rem;
+  opacity: 0.6;
+}
+
+.listening-text {
+  font-size: 1.2rem;
+  font-weight: 600;
+  text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
+}
+
+/* Current Location Marker */
+.current-location-marker {
+  background: none !important;
+  border: none !important;
+  font-size: 24px !important;
+  filter: drop-shadow(0 0 8px rgba(0, 255, 136, 0.8));
+}
+
+/* Leaflet Map Customization */
+.leaflet-container {
+  background: #0a0a1a !important;
+}
+
+.leaflet-control-attribution {
+  background: rgba(15, 15, 35, 0.9) !important;
+  color: #00ff88 !important;
+  border: 1px solid #00ff88 !important;
+  border-radius: 8px !important;
+}
+
+.leaflet-control-attribution a {
+  color: #00ccff !important;
+}
+
+.leaflet-control-zoom {
+  border: none !important;
+  box-shadow: 0 4px 20px rgba(0, 255, 136, 0.2) !important;
+}
+
+.leaflet-control-zoom a {
+  background: rgba(15, 15, 35, 0.95) !important;
+  border: 2px solid #00ff88 !important;
+  color: #00ff88 !important;
+  font-weight: 700 !important;
+  font-size: 16px !important;
+  transition: all 0.3s ease !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background: rgba(0, 255, 136, 0.2) !important;
+  transform: scale(1.05);
+}
+
+.leaflet-popup-content-wrapper {
+  background: rgba(15, 15, 35, 0.95) !important;
+  color: #00ff88 !important;
+  border: 2px solid #00ff88 !important;
+  border-radius: 12px !important;
+  box-shadow: 0 8px 32px rgba(0, 255, 136, 0.3) !important;
+}
+
+.leaflet-popup-tip {
+  background: rgba(15, 15, 35, 0.95) !important;
+  border: 2px solid #00ff88 !important;
+}
+
+/* Additional Animations */
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.3);
+    opacity: 1;
+  }
+  80%, 100% {
+    transform: scale(1.2);
+    opacity: 0;
+  }
+}
+
 /* Responsive Design */
 @media (max-width: 1024px) {
   .main-content {
@@ -378,6 +536,21 @@ body {
   .title-subtitle {
     display: none;
   }
+  
+  .layer-switcher {
+    top: 10px;
+    right: 10px;
+    padding: 0.8rem;
+  }
+  
+  .layer-buttons {
+    flex-direction: row;
+  }
+  
+  .layer-button {
+    padding: 0.5rem 0.8rem;
+    font-size: 0.8rem;
+  }
 }
 
 @media (max-width: 768px) {
@@ -396,5 +569,22 @@ body {
   
   .command-grid {
     grid-template-columns: 1fr 1fr;
+  }
+  
+  .layer-switcher {
+    top: 10px;
+    right: 10px;
+    left: 10px;
+    padding: 0.6rem;
+  }
+  
+  .layer-switcher-title {
+    font-size: 0.8rem;
+    margin-bottom: 0.5rem;
+  }
+  
+  .layer-button {
+    padding: 0.4rem 0.6rem;
+    font-size: 0.75rem;
   }
 }
