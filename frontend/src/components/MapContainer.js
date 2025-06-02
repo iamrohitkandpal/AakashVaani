@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback, memo, useMemo } from 'react';
 import { MapContainer as LeafletMapContainer, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -13,7 +13,7 @@ L.Icon.Default.mergeOptions({
 });
 
 // Enhanced Map event handler component with WMS support
-const MapEventHandler = ({ onMapReady, onLocationUpdate, currentLayer, activeLayers }) => {
+const MapEventHandler = memo(({ onMapReady, onLocationUpdate, currentLayer, activeLayers }) => {
   const map = useMap();
   const wmsLayersRef = useRef(new Map());
 
@@ -23,42 +23,60 @@ const MapEventHandler = ({ onMapReady, onLocationUpdate, currentLayer, activeLay
     }
   }, [map, onMapReady]);
 
-  // Handle WMS layer changes
+  // Handle WMS layer changes efficiently
   useEffect(() => {
     if (!map) return;
 
-    // Remove layers that are no longer active
-    wmsLayersRef.current.forEach((layer, layerId) => {
+    const currentLayers = new Set(wmsLayersRef.current.keys());
+    
+    // Find layers to remove
+    currentLayers.forEach(layerId => {
       if (!activeLayers.has(layerId)) {
-        map.removeLayer(layer);
-        wmsLayersRef.current.delete(layerId);
+        const layer = wmsLayersRef.current.get(layerId);
+        if (layer) {
+          map.removeLayer(layer);
+          wmsLayersRef.current.delete(layerId);
+        }
       }
     });
 
-    // Add new active layers
+    // Add new layers
     activeLayers.forEach(layerId => {
       if (!wmsLayersRef.current.has(layerId)) {
         const layerConfig = wmsService.getLayer(layerId);
+        
         if (layerConfig) {
           try {
-            let leafletLayer;
+            let leafletLayer = null;
             
-            // Create different types of layers based on configuration
-            if (layerConfig.url.includes('{z}') || layerConfig.subdomains) {
-              // Tile layer
-              leafletLayer = L.tileLayer(layerConfig.url, {
-                attribution: layerConfig.attribution,
+            // Make sure URL is defined before proceeding
+            if (!layerConfig.url) {
+              console.warn(`WMS layer ${layerId} has no URL defined`);
+              return;
+            }
+            
+            // Handle different layer types appropriately
+            if (layerConfig.url.includes('{z}')) {
+              // TileLayer format
+              const options = {
+                attribution: layerConfig.attribution || '',
                 maxZoom: layerConfig.maxZoom || 18,
-                opacity: 0.7,
-                subdomains: layerConfig.subdomains || []
-              });
+                opacity: 0.7
+              };
+              
+              // Only add subdomains if they are explicitly defined in the config
+              if (layerConfig.subdomains && Array.isArray(layerConfig.subdomains)) {
+                options.subdomains = layerConfig.subdomains;
+              }
+              
+              leafletLayer = L.tileLayer(layerConfig.url, options);
             } else if (layerConfig.layers) {
-              // WMS layer
+              // WMS layer format
               leafletLayer = L.tileLayer.wms(layerConfig.url, {
                 layers: layerConfig.layers,
-                format: layerConfig.format,
-                transparent: layerConfig.transparent,
-                attribution: layerConfig.attribution,
+                format: layerConfig.format || 'image/png',
+                transparent: layerConfig.transparent !== false, // Default to true
+                attribution: layerConfig.attribution || '',
                 maxZoom: layerConfig.maxZoom || 18,
                 opacity: 0.7
               });
@@ -76,22 +94,16 @@ const MapEventHandler = ({ onMapReady, onLocationUpdate, currentLayer, activeLay
     });
   }, [map, activeLayers]);
 
+  // Map event handling
   useMapEvents({
-    click(e) {
-      console.log('Map clicked at:', e.latlng);
-    },
-    zoomend() {
-      console.log('Zoom level:', map.getZoom());
-    },
     moveend() {
-      const center = map.getCenter();
-      console.log('Map center:', center);
+      // Handle move events if needed
     }
   });
 
   // Enhanced geolocation with better accuracy
   useEffect(() => {
-    if (navigator.geolocation) {
+    if (navigator.geolocation && map && onLocationUpdate) {
       const watchId = navigator.geolocation.watchPosition(
         (position) => {
           const location = {
@@ -99,25 +111,40 @@ const MapEventHandler = ({ onMapReady, onLocationUpdate, currentLayer, activeLay
             lng: position.coords.longitude,
             accuracy: position.coords.accuracy
           };
+          
           onLocationUpdate(location);
           
           // Update current location marker
-          const existingMarker = map._currentLocationMarker;
-          if (existingMarker) {
-            map.removeLayer(existingMarker);
+          if (map._currentLocationMarker) {
+            map.removeLayer(map._currentLocationMarker);
           }
 
-          const currentLocationMarker = L.marker([location.lat, location.lng], {
-            icon: L.divIcon({
-              className: 'current-location-marker',
-              html: '📍',
-              iconSize: [30, 30],
-              iconAnchor: [15, 15]
-            })
+          const currentLocationMarker = L.circleMarker([location.lat, location.lng], {
+            radius: 8,
+            fillColor: "#3399ff",
+            color: "#ffffff",
+            weight: 2,
+            opacity: 1,
+            fillOpacity: 0.7
           }).addTo(map);
           
-          currentLocationMarker.bindPopup(`📍 Your Current Location<br><small>Accuracy: ${Math.round(location.accuracy)}m</small>`);
-          map._currentLocationMarker = currentLocationMarker;
+          // Add a larger, semi-transparent circle to indicate accuracy
+          const accuracyCircle = L.circle([location.lat, location.lng], {
+            radius: location.accuracy,
+            fillColor: "#3399ff",
+            fillOpacity: 0.1,
+            color: "#3399ff",
+            weight: 1,
+            opacity: 0.4
+          }).addTo(map);
+          
+          // Store both markers together
+          map._currentLocationMarker = L.layerGroup([currentLocationMarker, accuracyCircle]);
+          
+          currentLocationMarker.bindTooltip("Your location", {
+            permanent: false,
+            direction: "top"
+          });
         },
         (error) => {
           console.warn('Geolocation error:', error);
@@ -125,20 +152,24 @@ const MapEventHandler = ({ onMapReady, onLocationUpdate, currentLayer, activeLay
         {
           enableHighAccuracy: true,
           timeout: 10000,
-          maximumAge: 60000 // Cache position for 1 minute
+          maximumAge: 30000
         }
       );
 
       return () => {
         navigator.geolocation.clearWatch(watchId);
+        if (map._currentLocationMarker) {
+          map.removeLayer(map._currentLocationMarker);
+        }
       };
     }
   }, [map, onLocationUpdate]);
 
   return null;
-};
+});
 
-const MapContainer = ({ onMapReady, onLocationUpdate, voiceStatus, activeLayers = new Set() }) => {
+// Main MapContainer component
+const MapContainer = memo(({ onMapReady, onLocationUpdate, voiceStatus, activeLayers = new Set(), currentLocation }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [currentLayer, setCurrentLayer] = useState('street');
   const [mapMetrics, setMapMetrics] = useState({
@@ -148,49 +179,45 @@ const MapContainer = ({ onMapReady, onLocationUpdate, voiceStatus, activeLayers 
   });
   const mapRef = useRef(null);
 
-  const defaultPosition = [20.5937, 78.9629]; // India center as default
-
-  // Enhanced layer configurations with professional WMS sources
+  // Default center position (India)
+  const defaultPosition = [20.5937, 78.9629];
+  
+  // Layer configurations
   const layerConfigs = {
     street: {
       url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       attribution: '© OpenStreetMap contributors',
-      name: 'Street Map'
+      name: 'Street Map',
+      subdomains: ['a', 'b', 'c']
     },
     satellite: {
       url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      attribution: '© Esri, Maxar, GeoEye, Earthstar Geographics, CNES/Airbus DS, USDA, USGS, AeroGRID, IGN, and the GIS User Community',
+      attribution: '© Esri, Maxar, GeoEye, Earthstar Geographics',
       name: 'Satellite'
     },
     terrain: {
       url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-      attribution: '© OpenTopoMap (CC-BY-SA)',
-      name: 'Terrain'
-    },
-    hybrid: {
-      url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-      attribution: '© Google',
-      name: 'Hybrid'
+      attribution: '© OpenTopoMap',
+      name: 'Terrain',
+      subdomains: ['a', 'b', 'c']
     },
     dark: {
       url: 'https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',
-      attribution: '© CartoDB, © OpenStreetMap contributors',
-      name: 'Dark Theme',
+      attribution: '© CartoDB, © OpenStreetMap',
+      name: 'Dark Mode',
       subdomains: ['a', 'b', 'c', 'd']
     }
   };
 
-  const handleMapReady = (map) => {
+  // Callback for handling map ready event
+  const handleMapReady = useCallback((map) => {
     setIsLoading(false);
     mapRef.current = map;
-    
-    // Enhanced map controls and styling
-    map.attributionControl.setPrefix('🗺️ Geo Voice Navigator - Professional GIS');
     
     // Add scale control
     L.control.scale({
       metric: true,
-      imperial: true,
+      imperial: false,
       position: 'bottomleft'
     }).addTo(map);
 
@@ -198,13 +225,13 @@ const MapContainer = ({ onMapReady, onLocationUpdate, voiceStatus, activeLayers 
     const coordsControl = L.control({ position: 'bottomright' });
     coordsControl.onAdd = function() {
       const div = L.DomUtil.create('div', 'coords-control');
-      div.style.background = 'rgba(15, 15, 35, 0.9)';
-      div.style.padding = '5px 10px';
-      div.style.borderRadius = '5px';
-      div.style.color = '#00ff88';
-      div.style.fontSize = '0.8rem';
-      div.style.border = '1px solid #00ff88';
-      div.innerHTML = 'Move mouse to see coordinates';
+      div.style.background = 'rgba(13, 31, 61, 0.8)';
+      div.style.padding = '4px 8px';
+      div.style.borderRadius = '4px';
+      div.style.color = '#3399ff';
+      div.style.fontSize = '0.7rem';
+      div.style.border = '1px solid rgba(51, 153, 255, 0.3)';
+      div.innerHTML = 'Hover to see coordinates';
       return div;
     };
     coordsControl.addTo(map);
@@ -218,7 +245,7 @@ const MapContainer = ({ onMapReady, onLocationUpdate, voiceStatus, activeLayers 
       }
     });
 
-    // Track map metrics
+    // Track map metrics for UI display
     map.on('moveend zoomend', () => {
       setMapMetrics({
         zoom: map.getZoom(),
@@ -230,38 +257,33 @@ const MapContainer = ({ onMapReady, onLocationUpdate, voiceStatus, activeLayers 
     if (onMapReady) {
       onMapReady(map);
     }
-  };
+  }, [onMapReady]);
 
-  const switchLayer = (layerType) => {
+  // Handle layer switching
+  const switchLayer = useCallback((layerType) => {
     setCurrentLayer(layerType);
-    
-    // Voice feedback
-    if ('speechSynthesis' in window) {
-      const utterance = new SpeechSynthesisUtterance(`Switched to ${layerConfigs[layerType].name}`);
-      utterance.rate = 1.1;
-      utterance.volume = 0.6;
-      speechSynthesis.speak(utterance);
-    }
-  };
+  }, []);
 
-  // Get available WMS categories for display
-  const wmsCategories = wmsService.getCategories();
+  // Get available WMS categories
+  const wmsCategories = useMemo(() => {
+    return wmsService.getCategories().slice(0, 2);
+  }, []);
 
   return (
     <div className="map-container">
       {isLoading && (
         <div className="map-loading">
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🛰️</div>
-            <div style={{ fontSize: '1.2rem', marginBottom: '0.5rem' }}>
-              Loading Professional GIS Map...
+            <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>🛰️</div>
+            <div style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>
+              Loading Map...
             </div>
             <div style={{ 
-              fontSize: '0.9rem', 
-              color: '#666', 
+              fontSize: '0.8rem', 
+              color: 'var(--text-muted)', 
               marginTop: '0.5rem' 
             }}>
-              Initializing voice commands, WMS layers, and geospatial intelligence
+              Initializing geospatial services
             </div>
           </div>
         </div>
@@ -273,14 +295,14 @@ const MapContainer = ({ onMapReady, onLocationUpdate, voiceStatus, activeLayers 
         style={{ 
           height: '100%', 
           width: '100%',
-          filter: voiceStatus === 'listening' ? 'brightness(1.1) saturate(1.2) hue-rotate(10deg)' : 'none',
+          filter: voiceStatus === 'listening' ? 'brightness(1.05) saturate(1.1)' : 'none',
           transition: 'filter 0.3s ease'
         }}
         zoomControl={true}
         scrollWheelZoom={true}
         doubleClickZoom={true}
         dragging={true}
-        preferCanvas={true} // Better performance for overlays
+        preferCanvas={true} // Better performance for many markers
       >
         <TileLayer
           url={layerConfigs[currentLayer].url}
@@ -297,7 +319,7 @@ const MapContainer = ({ onMapReady, onLocationUpdate, voiceStatus, activeLayers 
         />
       </LeafletMapContainer>
 
-      {/* Enhanced Layer Switcher */}
+      {/* Layer Switcher */}
       <div className="layer-switcher">
         <div className="layer-switcher-title">Base Map</div>
         <div className="layer-buttons">
@@ -306,6 +328,7 @@ const MapContainer = ({ onMapReady, onLocationUpdate, voiceStatus, activeLayers 
               key={key}
               className={`layer-button ${currentLayer === key ? 'active' : ''}`}
               onClick={() => switchLayer(key)}
+              aria-label={`Switch to ${config.name}`}
             >
               {config.name}
             </button>
@@ -313,67 +336,57 @@ const MapContainer = ({ onMapReady, onLocationUpdate, voiceStatus, activeLayers 
         </div>
       </div>
 
-      {/* WMS Layer Panel */}
-      <div className="wms-layer-panel">
-        <div className="wms-panel-title">
-          🛰️ Data Layers ({activeLayers.size} active)
-        </div>
-        <div className="wms-categories">
-          {wmsCategories.slice(0, 3).map(category => (
-            <div key={category.id} className="wms-category">
-              <div className="category-name">{category.name}</div>
-              <div className="category-layers">
-                {category.layers.slice(0, 2).map(layer => (
-                  <div 
-                    key={layer.id}
-                    className={`wms-layer-item ${activeLayers.has(layer.id) ? 'active' : ''}`}
-                  >
-                    <span className="layer-icon">{layer.icon}</span>
-                    <span className="layer-name">{layer.name}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Map Metrics Display */}
-      <div className="map-metrics">
-        <div className="metric-item">
-          🔍 Zoom: {mapMetrics.zoom}
-        </div>
-        {mapMetrics.center && (
-          <div className="metric-item">
-            📍 Center: {mapMetrics.center.lat.toFixed(4)}, {mapMetrics.center.lng.toFixed(4)}
-          </div>
-        )}
-      </div>
-
-      {/* Voice Status Overlay with Enhanced Effects */}
+      {/* Voice status overlay */}
       {voiceStatus === 'listening' && (
-        <div className="voice-listening-overlay">
-          <div className="listening-indicator">
-            <div className="pulse-ring"></div>
-            <div className="pulse-ring pulse-ring-2"></div>
-            <div className="listening-text">🎤 AI Voice Processing Active</div>
-            <div className="listening-subtext">Speak your geospatial command...</div>
-          </div>
-        </div>
-      )}
-
-      {/* Processing Status for Advanced Operations */}
-      {voiceStatus === 'processing' && (
-        <div className="processing-overlay">
-          <div className="processing-indicator">
-            <div className="processing-spinner"></div>
-            <div className="processing-text">🧠 AI Processing Command...</div>
-            <div className="processing-subtext">Analyzing geospatial request</div>
+        <div className="voice-listening-overlay" style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(10, 25, 41, 0.3)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          pointerEvents: 'none',
+          zIndex: 1000
+        }}>
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            background: 'rgba(10, 25, 41, 0.8)',
+            padding: '1rem 2rem',
+            borderRadius: '12px',
+            border: '1px solid var(--accent-primary)',
+            boxShadow: '0 0 20px rgba(51, 153, 255, 0.4)'
+          }}>
+            <div style={{
+              width: '60px',
+              height: '60px',
+              borderRadius: '50%',
+              background: 'rgba(51, 153, 255, 0.2)',
+              border: '2px solid var(--accent-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              animation: 'pulse 2s infinite',
+              marginBottom: '0.5rem'
+            }}>
+              <span style={{ fontSize: '1.5rem' }}>🎤</span>
+            </div>
+            <div style={{ 
+              color: 'var(--accent-primary)', 
+              fontWeight: 500,
+              fontSize: '0.9rem' 
+            }}>
+              Listening...
+            </div>
           </div>
         </div>
       )}
     </div>
   );
-};
+});
 
 export default MapContainer;
