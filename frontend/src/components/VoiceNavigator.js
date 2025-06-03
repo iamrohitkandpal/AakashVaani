@@ -136,37 +136,42 @@ class VoiceRecognitionEngine {
   async initializeTensorFlowModel() {
     try {
       console.log("Initializing TensorFlow.js voice model...");
-
-      // Set TensorFlow.js backend for GPU acceleration when available
-      await tf.ready();
-      const backendName = tf.getBackend();
-      console.log(`Using TensorFlow.js backend: ${backendName}`);
-
-      // Try to load model from multiple sources with error handling
-      const modelUrls = [
-        "https://storage.googleapis.com/tfjs-speech-commands-models/speech-commands-browser/v0.4/model.json",
-        "https://unpkg.com/@tensorflow-models/speech-commands@0.4.0/dist/speech-commands.min.js",
-      ];
-
-      for (const url of modelUrls) {
+      
+      // 1. First try to use the Web Speech API as the primary approach
+      if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
+        console.log("Browser speech recognition API is available - using as primary method");
+        this.modelMode = "browser";
+        return true;
+      }
+      
+      // 2. Only if the Web Speech API is not available, try TensorFlow.js
+      try {
+        // Set up TensorFlow backend
+        await tf.ready();
+        const backendName = tf.getBackend();
+        console.log(`Using TensorFlow.js backend: ${backendName}`);
+        
+        // Try a simpler, more reliable model
+        const simpleModelUrl = 'https://storage.googleapis.com/tfjs-models/tfjs/sentiment_cnn_v1/model.json';
+        
         try {
-          console.log(`Attempting to load model from: ${url}`);
-          this.tfModel = await tf.loadLayersModel(url);
-          console.log("✅ TensorFlow.js speech model loaded successfully");
+          this.tfModel = await tf.loadLayersModel(simpleModelUrl);
+          console.log("✅ TensorFlow.js model loaded successfully");
           this.modelMode = "tensorflow";
           return true;
         } catch (modelError) {
-          console.warn(`Failed to load from ${url}: ${modelError.message}`);
-          // Continue to next URL
+          console.warn(`Failed to load TensorFlow model: ${modelError.message}`);
         }
+      } catch (tfError) {
+        console.warn(`TensorFlow.js initialization failed: ${tfError.message}`);
       }
-
-      // Fallback to browser API
-      console.warn("All model loading attempts failed, using browser API");
+      
+      // 3. If all TF.js attempts fail, gracefully fall back to browser API
+      console.log("Falling back to browser speech recognition API");
       this.modelMode = "browser";
-      return false;
+      return true;
     } catch (error) {
-      console.warn("TensorFlow.js initialization failed:", error);
+      console.warn("Voice recognition initialization error:", error);
       this.modelMode = "browser";
       return false;
     }
@@ -541,34 +546,36 @@ const VoiceNavigator = ({
   const handleWMSLayer = async (layerParam, enable, engine) => {
     // Try to detect which layer the user is referring to
     let layerId = layerParam;
-
-    if (typeof layerParam === "string" && !layerParam.includes("_")) {
-      // This is likely a descriptive term, not an ID
-      const detectedLayer = wmsService.detectLayerFromCommand(layerParam);
-      if (detectedLayer) {
-        layerId = detectedLayer;
-      }
+    const wmsLayerFromVoice = wmsService.detectLayerFromCommand(layerParam);
+    
+    if (wmsLayerFromVoice) {
+      layerId = wmsLayerFromVoice;
     }
-
-    // Get layer information
+    
+    // Get the layer info for better voice feedback
     const layerInfo = wmsService.getLayerInfo(layerId);
-
-    if (layerInfo) {
-      // Update the layer state via callback
+    
+    // If layer exists and handler is available, update the layer
+    if (layerInfo && onLayerChange) {
       onLayerChange(layerId, enable);
-
-      // Provide voice feedback
+      
       if (enable) {
-        engine.speak(`Enabling ${layerInfo.name} layer`);
+        engine.speak(`Showing ${layerInfo.name || layerId} layer`);
       } else {
-        engine.speak(`Disabling ${layerInfo.name} layer`);
+        engine.speak(`Hiding ${layerInfo.name || layerId} layer`);
       }
-    } else {
-      engine.speak(`Sorry, I couldn't find the ${layerParam} layer`);
+      return;
     }
+    
+    engine.speak(`I couldn't find a layer called ${layerParam}`);
   };
 
   const handleNearbySearch = async (query, engine) => {
+    if (!mapInstance) {
+      engine.speak("Map is not available right now.");
+      return;
+    }
+
     if (!currentLocation) {
       engine.speak(
         "Your location is not available. Please enable location services."
@@ -598,23 +605,20 @@ const VoiceNavigator = ({
         // Add markers for found POIs
         pois.forEach((poi) => {
           const marker = L.marker([poi.lat, poi.lng]).addTo(mapInstance);
-
+          
           let popupContent = `<b>${poi.name}</b>`;
-          if (poi.type) popupContent += `<br><small>${poi.type}</small>`;
-          if (poi.address) popupContent += `<br>${poi.address}`;
-          if (poi.distance)
-            popupContent += `<br><small>Distance: ${poi.distance.toFixed(
-              2
-            )} km</small>`;
-
+          if (poi.address) popupContent += `<br/>${poi.address}`;
+          if (poi.distance) popupContent += `<br/>Distance: ${poi.distance.toFixed(2)} km`;
+          if (poi.phone) popupContent += `<br/>📞 ${poi.phone}`;
+          
           marker.bindPopup(popupContent);
         });
-
-        // Create bounds for all markers
-        const bounds = L.latLngBounds(pois.map((poi) => [poi.lat, poi.lng]));
+        
+        // Fit map to show all markers
+        const bounds = L.latLngBounds(pois.map(poi => [poi.lat, poi.lng]));
         mapInstance.fitBounds(bounds, { padding: [50, 50] });
-
-        engine.speak(`Found ${pois.length} ${category} locations nearby`);
+        
+        engine.speak(`Found ${pois.length} ${category} nearby`);
       } else {
         engine.speak(`Sorry, I couldn't find any ${category} near you`);
       }

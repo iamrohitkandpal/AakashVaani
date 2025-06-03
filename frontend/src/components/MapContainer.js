@@ -96,71 +96,104 @@ const MapEventHandler = memo(({ onMapReady, onLocationUpdate, currentLayer, acti
 
   // Map event handling
   useMapEvents({
+    click(e) {
+      // Handle map clicks if needed
+      console.log(`Map clicked at: ${e.latlng.lat}, ${e.latlng.lng}`);
+    },
+    zoomend() {
+      // Handle zoom events if needed
+      const currentZoom = map.getZoom();
+      console.log(`Map zoom changed to: ${currentZoom}`);
+    },
     moveend() {
       // Handle move events if needed
+      const center = map.getCenter();
+      console.log(`Map moved to: ${center.lat}, ${center.lng}`);
     }
   });
 
-  // Enhanced geolocation with better accuracy
+  // Enhanced geolocation with better accuracy and error handling
   useEffect(() => {
     if (navigator.geolocation && map && onLocationUpdate) {
+      // Default location for India if geolocation fails
+      const defaultLocation = { lat: 20.5937, lng: 78.9629, accuracy: 1000 };
+      
+      // Set a timeout for geolocation
+      const geoTimeout = setTimeout(() => {
+        console.log("Geolocation timed out, using default location");
+        onLocationUpdate(defaultLocation);
+        
+        // Add default location marker
+        const marker = L.marker([defaultLocation.lat, defaultLocation.lng], {
+          icon: L.divIcon({
+            className: 'default-location-marker',
+            html: '📍',
+            iconSize: [30, 30],
+            iconAnchor: [15, 15]
+          })
+        }).addTo(map);
+        marker.bindPopup('Default Location (India)').openPopup();
+      }, 5000); // 5 seconds timeout
+      
+      // Try to get actual location
       const watchId = navigator.geolocation.watchPosition(
         (position) => {
+          // Clear the timeout since we got a position
+          clearTimeout(geoTimeout);
+          
           const location = {
             lat: position.coords.latitude,
             lng: position.coords.longitude,
             accuracy: position.coords.accuracy
           };
-          
           onLocationUpdate(location);
           
-          // Update current location marker
+          // Add/update current location marker
           if (map._currentLocationMarker) {
             map.removeLayer(map._currentLocationMarker);
           }
-
-          const currentLocationMarker = L.circleMarker([location.lat, location.lng], {
-            radius: 8,
-            fillColor: "#3399ff",
-            color: "#ffffff",
-            weight: 2,
-            opacity: 1,
-            fillOpacity: 0.7
+          
+          const currentLocationMarker = L.marker([location.lat, location.lng], {
+            icon: L.divIcon({
+              className: 'current-location-marker',
+              html: '📍',
+              iconSize: [30, 30],
+              iconAnchor: [15, 15]
+            })
           }).addTo(map);
           
-          // Add a larger, semi-transparent circle to indicate accuracy
-          const accuracyCircle = L.circle([location.lat, location.lng], {
-            radius: location.accuracy,
-            fillColor: "#3399ff",
-            fillOpacity: 0.1,
-            color: "#3399ff",
-            weight: 1,
-            opacity: 0.4
-          }).addTo(map);
-          
-          // Store both markers together
-          map._currentLocationMarker = L.layerGroup([currentLocationMarker, accuracyCircle]);
-          
-          currentLocationMarker.bindTooltip("Your location", {
-            permanent: false,
-            direction: "top"
-          });
+          currentLocationMarker.bindPopup(`📍 Your Current Location<br><small>Accuracy: ${Math.round(location.accuracy)}m</small>`);
+          map._currentLocationMarker = currentLocationMarker;
         },
         (error) => {
+          // Clear the timeout since we got an error
+          clearTimeout(geoTimeout);
           console.warn('Geolocation error:', error);
+          
+          // Use default location on error
+          onLocationUpdate(defaultLocation);
+          
+          // Add default location marker
+          const marker = L.marker([defaultLocation.lat, defaultLocation.lng], {
+            icon: L.divIcon({
+              className: 'default-location-marker',
+              html: '📍',
+              iconSize: [30, 30],
+              iconAnchor: [15, 15]
+            })
+          }).addTo(map);
+          marker.bindPopup('Default Location (India)').openPopup();
         },
         {
           enableHighAccuracy: true,
           timeout: 10000,
-          maximumAge: 30000
+          maximumAge: 60000 // Cache position for 1 minute
         }
       );
-
+      
       return () => {
+        clearTimeout(geoTimeout);
         navigator.geolocation.clearWatch(watchId);
-        if (map._currentLocationMarker) {
-          map.removeLayer(map._currentLocationMarker);
-        }
       };
     }
   }, [map, onLocationUpdate]);
@@ -183,7 +216,7 @@ const MapContainer = memo(({ onMapReady, onLocationUpdate, voiceStatus, activeLa
   const defaultPosition = [20.5937, 78.9629];
   
   // Layer configurations
-  const layerConfigs = {
+  const layerConfigs = useMemo(() => ({
     street: {
       url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       attribution: '© OpenStreetMap contributors',
@@ -207,7 +240,7 @@ const MapContainer = memo(({ onMapReady, onLocationUpdate, voiceStatus, activeLa
       name: 'Dark Mode',
       subdomains: ['a', 'b', 'c', 'd']
     }
-  };
+  }), []);
 
   // Callback for handling map ready event
   const handleMapReady = useCallback((map) => {
@@ -254,10 +287,17 @@ const MapContainer = memo(({ onMapReady, onLocationUpdate, voiceStatus, activeLa
       });
     });
     
+    // Add the setBaseLayer method to the map instance
+    map.setBaseLayer = function(layerType) {
+      if (layerConfigs[layerType]) {
+        setCurrentLayer(layerType);
+      }
+    };
+    
     if (onMapReady) {
       onMapReady(map);
     }
-  }, [onMapReady]);
+  }, [onMapReady, layerConfigs]);
 
   // Handle layer switching
   const switchLayer = useCallback((layerType) => {
@@ -266,7 +306,7 @@ const MapContainer = memo(({ onMapReady, onLocationUpdate, voiceStatus, activeLa
 
   // Get available WMS categories
   const wmsCategories = useMemo(() => {
-    return wmsService.getCategories().slice(0, 2);
+    return wmsService.getCategories ? wmsService.getCategories().slice(0, 2) : [];
   }, []);
 
   return (
@@ -275,12 +315,12 @@ const MapContainer = memo(({ onMapReady, onLocationUpdate, voiceStatus, activeLa
         <div className="map-loading">
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>🛰️</div>
-            <div style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>
+            <div style={{ fontSize: '1rem', marginBottom: '0.5rem', color: '#fff' }}>
               Loading Map...
             </div>
             <div style={{ 
               fontSize: '0.8rem', 
-              color: 'var(--text-muted)', 
+              color: '#a0aec0', 
               marginTop: '0.5rem' 
             }}>
               Initializing geospatial services
@@ -292,17 +332,11 @@ const MapContainer = memo(({ onMapReady, onLocationUpdate, voiceStatus, activeLa
       <LeafletMapContainer
         center={defaultPosition}
         zoom={6}
-        style={{ 
-          height: '100%', 
-          width: '100%',
-          filter: voiceStatus === 'listening' ? 'brightness(1.05) saturate(1.1)' : 'none',
-          transition: 'filter 0.3s ease'
-        }}
+        style={{ height: '100%', width: '100%' }}
         zoomControl={true}
         scrollWheelZoom={true}
         doubleClickZoom={true}
         dragging={true}
-        preferCanvas={true} // Better performance for many markers
       >
         <TileLayer
           url={layerConfigs[currentLayer].url}
@@ -338,50 +372,12 @@ const MapContainer = memo(({ onMapReady, onLocationUpdate, voiceStatus, activeLa
 
       {/* Voice status overlay */}
       {voiceStatus === 'listening' && (
-        <div className="voice-listening-overlay" style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(10, 25, 41, 0.3)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          pointerEvents: 'none',
-          zIndex: 1000
-        }}>
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            background: 'rgba(10, 25, 41, 0.8)',
-            padding: '1rem 2rem',
-            borderRadius: '12px',
-            border: '1px solid var(--accent-primary)',
-            boxShadow: '0 0 20px rgba(51, 153, 255, 0.4)'
-          }}>
-            <div style={{
-              width: '60px',
-              height: '60px',
-              borderRadius: '50%',
-              background: 'rgba(51, 153, 255, 0.2)',
-              border: '2px solid var(--accent-primary)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              animation: 'pulse 2s infinite',
-              marginBottom: '0.5rem'
-            }}>
-              <span style={{ fontSize: '1.5rem' }}>🎤</span>
+        <div className="voice-listening-overlay">
+          <div className="voice-listening-indicator">
+            <div className="voice-pulse">
+              <span>🎤</span>
             </div>
-            <div style={{ 
-              color: 'var(--accent-primary)', 
-              fontWeight: 500,
-              fontSize: '0.9rem' 
-            }}>
-              Listening...
-            </div>
+            <div>Listening...</div>
           </div>
         </div>
       )}
