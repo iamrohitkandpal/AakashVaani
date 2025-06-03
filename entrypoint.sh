@@ -1,24 +1,14 @@
 #!/bin/sh
 set -e
 
-# Start the FastAPI backend
-cd /backend || { echo "Backend directory not found"; exit 1; }
-
-echo "Starting FastAPI backend"
-# Start Uvicorn with proper host binding
-uvicorn server:app --host 0.0.0.0 --port 8001 &
-BACKEND_PID=$!
-
-echo "Waiting for backend to start..."
-sleep 30
-
-if ! kill -0 $BACKEND_PID 2>/dev/null; then
-    echo "Backend failed to start at initialization, exiting"
-    exit 1
-fi
+# Start the backend server in the background
+cd /backend
+echo "Starting backend server..."
+python3 server.py &
 
 # Start Nginx
-nginx -g 'daemon off;' &
+echo "Starting nginx..."
+nginx -g "daemon off;"
 NGINX_PID=$!
 
 # Handle termination signals
