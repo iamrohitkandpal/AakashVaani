@@ -4,6 +4,7 @@ import VoiceNavigator from "./components/VoiceNavigator";
 import MapContainer from "./components/MapContainer";
 import VoiceCommandLog from "./components/VoiceCommandLog";
 import VoiceStatusIndicator from "./components/VoiceStatusIndicator";
+import { downloadAndCacheModel, createFallbackModel } from './utils/modelDownloader';
 
 function App() {
   const [voiceCommands, setVoiceCommands] = useState([]);
@@ -26,6 +27,47 @@ function App() {
         // Initialize speech synthesis voices
         if ("speechSynthesis" in window) {
           speechSynthesis.getVoices(); // Trigger voice loading
+        }
+
+        // Try to download and cache models in the background
+        const modelsCached = localStorage.getItem('models_cached');
+        if (!modelsCached) {
+          // This runs in background, won't block app initialization
+          Promise.all([
+            downloadAndCacheModel(
+              'https://storage.googleapis.com/tfjs-models/tfjs/sentiment_cnn_v1/model.json', 
+              'sentiment_model',
+              [
+                'https://cdn.jsdelivr.net/npm/@tensorflow-models/universal-sentence-encoder/dist/universal-sentence-encoder.min.js',
+                'https://unpkg.com/@tensorflow-models/universal-sentence-encoder'
+              ]
+            ),
+            downloadAndCacheModel(
+              'https://tfhub.dev/tensorflow/tfjs-model/universal-sentence-encoder/1/default/1/model.json',
+              'sentence_encoder',
+              [
+                'https://cdn.jsdelivr.net/npm/@tensorflow-models/universal-sentence-encoder',
+                'https://unpkg.com/@tensorflow-models/universal-sentence-encoder@1.3.3/dist/universal-sentence-encoder.min.js'
+              ]
+            )
+          ]).then(async (results) => {
+            // If both downloads succeed, mark as cached
+            if (results[0] && results[1]) {
+              localStorage.setItem('models_cached', 'true');
+              console.log("All models successfully cached");
+            } else {
+              // If any downloads fail, try to create a fallback model
+              if (!results[0]) await createFallbackModel('sentiment_model');
+              if (!results[1]) await createFallbackModel('sentence_encoder');
+              localStorage.setItem('models_cached', 'partial');
+              console.log("Some models failed to download, using fallbacks");
+            }
+          }).catch(err => {
+            console.warn('Failed to cache models for offline use:', err);
+            // Create fallback models even if promises fail
+            createFallbackModel('sentiment_model');
+            createFallbackModel('sentence_encoder');
+          });
         }
 
         // Show welcome message
@@ -101,11 +143,8 @@ function App() {
   const exportCommandHistory = () => {
     try {
       const dataStr = JSON.stringify(voiceCommands, null, 2);
-      const dataUri =
-        "data:application/json;charset=utf-8," + encodeURIComponent(dataStr);
-      const exportFileDefaultName = `voice_commands_${new Date()
-        .toISOString()
-        .slice(0, 10)}.json`;
+      const dataUri = "data:application/json;charset=utf-8," + encodeURIComponent(dataStr);
+      const exportFileDefaultName = `voice_commands_${new Date().toISOString().slice(0, 10)}.json`;
       const linkElement = document.createElement("a");
       linkElement.setAttribute("href", dataUri);
       linkElement.setAttribute("download", exportFileDefaultName);
@@ -166,21 +205,12 @@ function App() {
         <div className="left-panel">
           <div className="panel-container">
             {/* Voice Control Panel */}
-            <div
-              className={`collapsible-panel ${
-                expandedPanel === "voice" ? "expanded" : ""
-              }`}
-            >
-              <div
-                className="panel-header"
-                onClick={() => togglePanel("voice")}
-              >
+            <div className={`collapsible-panel ${expandedPanel === "voice" ? "expanded" : ""}`}>
+              <div className="panel-header" onClick={() => togglePanel("voice")}>
                 <h2>
                   <span className="panel-icon">🎤</span> Voice Control
                 </h2>
-                <span className="panel-toggle">
-                  {expandedPanel === "voice" ? "−" : "+"}
-                </span>
+                <span className="panel-toggle">{expandedPanel === "voice" ? "−" : "+"}</span>
               </div>
               <div className="panel-content">
                 <VoiceNavigator
@@ -195,15 +225,8 @@ function App() {
             </div>
 
             {/* Command History Panel */}
-            <div
-              className={`collapsible-panel ${
-                expandedPanel === "history" ? "expanded" : ""
-              }`}
-            >
-              <div
-                className="panel-header"
-                onClick={() => togglePanel("history")}
-              >
+            <div className={`collapsible-panel ${expandedPanel === "history" ? "expanded" : ""}`}>
+              <div className="panel-header" onClick={() => togglePanel("history")}>
                 <h2>
                   <span className="panel-icon">📝</span> Command History
                   <span className="command-count">{voiceCommands.length}</span>
@@ -213,29 +236,21 @@ function App() {
                     <>
                       <button
                         className="action-button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          clearAllCommands();
-                        }}
+                        onClick={(e) => { e.stopPropagation(); clearAllCommands(); }}
                         title="Clear history"
                       >
                         🗑️
                       </button>
                       <button
                         className="action-button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          exportCommandHistory();
-                        }}
+                        onClick={(e) => { e.stopPropagation(); exportCommandHistory(); }}
                         title="Export history"
                       >
                         💾
                       </button>
                     </>
                   )}
-                  <span className="panel-toggle">
-                    {expandedPanel === "history" ? "−" : "+"}
-                  </span>
+                  <span className="panel-toggle">{expandedPanel === "history" ? "−" : "+"}</span>
                 </div>
               </div>
               <div className="panel-content">
@@ -260,7 +275,7 @@ function App() {
       {/* Help Overlay */}
       {showHelp && (
         <div className="modal-overlay" onClick={toggleHelp}>
-          <div className="help-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="help-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h2>
                 <span>🎤</span> Voice Command Guide
@@ -324,18 +339,9 @@ function App() {
                 <h3>
                   <span>💡</span> Tips
                 </h3>
-                <p>
-                  Speak clearly and naturally. Use your normal speaking voice and
-                  pace.
-                </p>
-                <p>
-                  If a command isn't recognized, try rephrasing or using simpler
-                  terms.
-                </p>
-                <p>
-                  For better accuracy, minimize background noise when giving
-                  commands.
-                </p>
+                <p>Speak clearly and naturally. Use your normal speaking voice and pace.</p>
+                <p>If a command isn't recognized, try rephrasing or using simpler terms.</p>
+                <p>For better accuracy, minimize background noise when giving commands.</p>
               </div>
             </div>
           </div>
@@ -357,8 +363,7 @@ function App() {
           {currentLocation && (
             <div className="dev-metric">
               <span>
-                Loc: {currentLocation.lat.toFixed(4)},{" "}
-                {currentLocation.lng.toFixed(4)}
+                Loc: {currentLocation.lat.toFixed(4)}, {currentLocation.lng.toFixed(4)}
               </span>
             </div>
           )}
