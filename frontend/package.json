@@ -4,6 +4,8 @@
   "private": true,
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-models": "^4.0.0",
+    "@tensorflow-models/speech-commands": "^0.5.4",
     "axios": "^1.8.4",
     "cra-template": "1.2.0",
     "leaflet": "^1.9.4",
