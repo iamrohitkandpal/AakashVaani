@@ -84,6 +84,100 @@ class POIService {
         query: '(public_transport=station or railway=station or amenity=bus_station)'
       }
     };
+
+    this.categoryMap = {
+      // Food & Drink
+      'restaurant': 'restaurant',
+      'restaurants': 'restaurant',
+      'food': 'restaurant',
+      'dining': 'restaurant',
+      'cafe': 'cafe',
+      'cafes': 'cafe',
+      'coffee': 'cafe',
+      'bar': 'bar',
+      'bars': 'bar',
+      'pub': 'pub',
+      'pubs': 'pub',
+      
+      // Healthcare
+      'hospital': 'hospital',
+      'hospitals': 'hospital',
+      'clinic': 'clinic',
+      'clinics': 'clinic',
+      'doctor': 'doctors',
+      'doctors': 'doctors',
+      'pharmacy': 'pharmacy',
+      'pharmacies': 'pharmacy',
+      'medical': 'hospital',
+      'healthcare': 'hospital',
+      
+      // Transportation
+      'gas': 'fuel',
+      'gas station': 'fuel',
+      'petrol': 'fuel',
+      'fuel': 'fuel',
+      'bus stop': 'bus_stop',
+      'bus station': 'bus_station',
+      'train': 'train_station',
+      'train station': 'train_station',
+      'railway': 'train_station',
+      'airport': 'airport',
+      'taxi': 'taxi',
+      
+      // Financial
+      'bank': 'bank',
+      'banks': 'bank',
+      'atm': 'atm',
+      'atms': 'atm',
+      
+      // Shopping
+      'supermarket': 'supermarket',
+      'supermarkets': 'supermarket',
+      'grocery': 'supermarket',
+      'groceries': 'supermarket',
+      'shop': 'shop',
+      'shops': 'shop',
+      'shopping': 'mall',
+      'mall': 'mall',
+      'malls': 'mall',
+      
+      // Accommodation
+      'hotel': 'hotel',
+      'hotels': 'hotel',
+      'motel': 'hotel',
+      'hostel': 'hostel',
+      'lodging': 'hotel',
+      
+      // Entertainment
+      'cinema': 'cinema',
+      'cinemas': 'cinema',
+      'movie': 'cinema',
+      'movies': 'cinema',
+      'theater': 'theatre',
+      'theatre': 'theatre',
+      'museum': 'museum',
+      'museums': 'museum',
+      'gallery': 'art_gallery',
+      'park': 'park',
+      'parks': 'park',
+      
+      // Education
+      'school': 'school',
+      'college': 'college',
+      'university': 'university',
+      'library': 'library',
+      'libraries': 'library',
+      
+      // Other
+      'police': 'police',
+      'post office': 'post_office',
+      'post': 'post_office',
+      'church': 'place_of_worship',
+      'temple': 'place_of_worship',
+      'mosque': 'place_of_worship',
+      'worship': 'place_of_worship',
+      'religious': 'place_of_worship'
+    };
   }
 
   async findNearby(lat, lng, category, radiusKm = 2, limit = 20) {
@@ -116,94 +210,111 @@ class POIService {
       `;
 
       this.lastRequestTime = Date.now();
+      
+      // Perform the request with error handling
       const response = await fetch(this.overpassUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: `data=${encodeURIComponent(query)}`
+        body: `data=${encodeURIComponent(query)}`,
       });
 
       if (!response.ok) {
-        throw new Error(`POI request failed: ${response.status}`);
+        throw new Error(`Overpass API request failed: ${response.status}`);
       }
 
       const data = await response.json();
-      const pois = this.processOverpassData(data, categoryConfig);
+      
+      // Process the results
+      const results = this.processOverpassData(data, categoryConfig);
+      
+      // Add distance and sort by proximity
+      const poisWithDistance = this.addDistanceAndSort(results, lat, lng);
       
       // Cache the result
-      this.cache.set(cacheKey, pois);
+      this.cache.set(cacheKey, poisWithDistance);
       
-      // Clean cache if it gets too large
+      // Clean cache if it gets too big
       if (this.cache.size > 50) {
+        // Delete oldest entry
         const firstKey = this.cache.keys().next().value;
         this.cache.delete(firstKey);
       }
-
-      return pois;
+      
+      return poisWithDistance;
     } catch (error) {
       console.error('POI search error:', error);
+      
+      // In case of error, return empty array
       return [];
     }
   }
 
   processOverpassData(data, categoryConfig) {
-    if (!data.elements) return [];
+    if (!data.elements) {
+      return [];
+    }
 
     return data.elements.map(element => {
-      // Get coordinates (handle nodes, ways, and relations)
-      let lat, lng;
-      if (element.type === 'node') {
-        lat = element.lat;
-        lng = element.lon;
-      } else if (element.center) {
-        lat = element.center.lat;
-        lng = element.center.lon;
-      } else if (element.lat && element.lon) {
-        lat = element.lat;
-        lng = element.lon;
+      try {
+        // Check if it's a way/relation with a center point
+        const lat = element.center ? element.center.lat : element.lat;
+        const lng = element.center ? element.center.lon : element.lon;
+        
+        if (!lat || !lng) {
+          return null;
+        }
+        
+        // Get the name from tags
+        const name = element.tags?.name || 
+                    (element.tags?.brand || element.tags?.operator) || 
+                    `${categoryConfig.name} #${element.id.toString().substring(0, 4)}`;
+        
+        return {
+          id: element.id.toString(),
+          name: name,
+          lat: lat,
+          lng: lng,
+          category: categoryConfig.name,
+          icon: categoryConfig.icon,
+          address: this.buildAddress(element.tags),
+          phone: element.tags?.phone || element.tags?.['contact:phone'],
+          website: element.tags?.website || element.tags?.url,
+          openingHours: element.tags?.opening_hours
+        };
+      } catch (e) {
+        console.error('Error processing POI element:', e);
+        return null;
       }
-
-      if (!lat || !lng) return null;
-
-      const tags = element.tags || {};
-      
-      return {
-        id: element.id,
-        type: element.type,
-        lat,
-        lng,
-        name: tags.name || tags.brand || 'Unnamed Location',
-        category: categoryConfig.name,
-        icon: categoryConfig.icon,
-        amenity: tags.amenity,
-        cuisine: tags.cuisine,
-        phone: tags.phone,
-        website: tags.website,
-        openingHours: tags.opening_hours,
-        address: this.buildAddress(tags),
-        rating: tags['stars'] || null,
-        wheelchair: tags.wheelchair,
-        tags: tags,
-        distance: null // Will be calculated when displaying
-      };
     }).filter(poi => poi !== null);
   }
 
   buildAddress(tags) {
     const parts = [];
     
-    if (tags['addr:housenumber']) parts.push(tags['addr:housenumber']);
-    if (tags['addr:street']) parts.push(tags['addr:street']);
-    if (tags['addr:city']) parts.push(tags['addr:city']);
-    if (tags['addr:postcode']) parts.push(tags['addr:postcode']);
+    if (tags['addr:housenumber']) {
+      parts.push(tags['addr:housenumber']);
+    }
+    
+    if (tags['addr:street']) {
+      parts.push(tags['addr:street']);
+    }
+    
+    if (tags['addr:city']) {
+      parts.push(tags['addr:city']);
+    }
+    
+    if (tags['addr:postcode']) {
+      parts.push(tags['addr:postcode']);
+    }
     
     return parts.length > 0 ? parts.join(', ') : null;
   }
 
   // Calculate distance between two points
   calculateDistance(lat1, lng1, lat2, lng2) {
-    const R = 6371; // Earth's radius in kilometers
+    const R = 6371; // Earth's radius in km
     const dLat = this.toRadians(lat2 - lat1);
     const dLng = this.toRadians(lng2 - lng1);
     const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
@@ -227,31 +338,36 @@ class POIService {
 
   // Smart category detection from voice commands
   detectCategory(query) {
-    const normalized = query.toLowerCase();
+    if (!query || typeof query !== 'string') return null;
     
-    // Direct matches
-    for (const [key, config] of Object.entries(this.categories)) {
-      if (normalized.includes(key) || normalized.includes(config.name.toLowerCase())) {
-        return key;
+    const normalizedQuery = query.toLowerCase();
+    
+    // Try direct match first
+    for (const [keyword, category] of Object.entries(this.categoryMap)) {
+      if (normalizedQuery.includes(keyword)) {
+        return category;
       }
     }
-
-    // Keyword matches
-    if (normalized.includes('eat') || normalized.includes('food') || normalized.includes('restaurant')) return 'food';
-    if (normalized.includes('medical') || normalized.includes('doctor') || normalized.includes('health')) return 'hospital';
-    if (normalized.includes('money') || normalized.includes('cash') || normalized.includes('atm')) return 'bank';
-    if (normalized.includes('fuel') || normalized.includes('petrol') || normalized.includes('gasoline')) return 'gas';
-    if (normalized.includes('learn') || normalized.includes('education')) return 'school';
-    if (normalized.includes('stay') || normalized.includes('accommodation')) return 'hotel';
-    if (normalized.includes('buy') || normalized.includes('store') || normalized.includes('market')) return 'shopping';
-    if (normalized.includes('nature') || normalized.includes('green') || normalized.includes('outdoor')) return 'park';
-    if (normalized.includes('exercise') || normalized.includes('workout') || normalized.includes('fitness')) return 'gym';
-    if (normalized.includes('emergency') || normalized.includes('help')) return 'police';
-    if (normalized.includes('mail') || normalized.includes('package')) return 'post';
-    if (normalized.includes('bus') || normalized.includes('train') || normalized.includes('transport')) return 'transit';
     
-    // Default fallback
-    return 'restaurant';
+    // If no direct match, make an educated guess using word similarity
+    const words = normalizedQuery.split(/\s+/);
+    for (const word of words) {
+      if (word.length > 3) { // Only consider words longer than 3 characters
+        for (const [keyword, category] of Object.entries(this.categoryMap)) {
+          // Simple prefix matching
+          if (keyword.startsWith(word) || word.startsWith(keyword)) {
+            return category;
+          }
+        }
+      }
+    }
+    
+    // Default to a reasonable category if no match
+    if (normalizedQuery.includes('find') || normalizedQuery.includes('search')) {
+      return 'restaurant'; // Most commonly searched POI
+    }
+    
+    return null;
   }
 
   getAvailableCategories() {
