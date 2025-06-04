@@ -1,384 +1,329 @@
 // Points of Interest Service using Overpass API
 class POIService {
   constructor() {
-    this.overpassUrl = 'https://overpass-api.de/api/interpreter';
-    this.cache = new Map();
-    this.rateLimitDelay = 2000; // 2 seconds between requests
-    this.lastRequestTime = 0;
+    this.overpassEndpoint = 'https://overpass-api.de/api/interpreter';
+    this.backendURL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
+    this.backendNearbyEndpoint = `${this.backendURL}/nearby`;
     
-    // Define POI categories with Overpass query patterns
-    this.categories = {
-      'restaurant': {
-        name: 'Restaurants',
-        icon: '🍽️',
-        query: 'amenity=restaurant'
-      },
-      'food': {
-        name: 'Food & Dining',
-        icon: '🍔',
-        query: '(amenity=restaurant or amenity=fast_food or amenity=cafe or amenity=bar)'
-      },
-      'hospital': {
-        name: 'Hospitals',
-        icon: '🏥',
-        query: 'amenity=hospital'
-      },
-      'pharmacy': {
-        name: 'Pharmacies',
-        icon: '💊',
-        query: 'amenity=pharmacy'
-      },
-      'bank': {
-        name: 'Banks & ATMs',
-        icon: '🏦',
-        query: '(amenity=bank or amenity=atm)'
-      },
-      'gas': {
-        name: 'Gas Stations',
-        icon: '⛽',
-        query: 'amenity=fuel'
-      },
-      'school': {
-        name: 'Schools',
-        icon: '🏫',
-        query: 'amenity=school'
-      },
-      'university': {
-        name: 'Universities',
-        icon: '🎓',
-        query: 'amenity=university'
-      },
-      'hotel': {
-        name: 'Hotels',
-        icon: '🏨',
-        query: 'tourism=hotel'
-      },
-      'shopping': {
-        name: 'Shopping',
-        icon: '🛍️',
-        query: '(shop=supermarket or shop=mall or amenity=marketplace)'
-      },
-      'park': {
-        name: 'Parks',
-        icon: '🌳',
-        query: 'leisure=park'
-      },
-      'gym': {
-        name: 'Gyms & Fitness',
-        icon: '💪',
-        query: 'leisure=fitness_centre'
-      },
-      'police': {
-        name: 'Police Stations',
-        icon: '👮',
-        query: 'amenity=police'
-      },
-      'post': {
-        name: 'Post Offices',
-        icon: '📮',
-        query: 'amenity=post_office'
-      },
-      'transit': {
-        name: 'Public Transit',
-        icon: '🚌',
-        query: '(public_transport=station or railway=station or amenity=bus_station)'
-      }
-    };
-
-    this.categoryMap = {
+    // Cache for queries
+    this.cache = new Map();
+    this.cacheSize = 100;
+    this.cacheTTL = 60 * 60 * 1000; // 1 hour in ms
+    
+    // Map amenity categories
+    this.amenityCategories = {
       // Food & Drink
-      'restaurant': 'restaurant',
-      'restaurants': 'restaurant',
-      'food': 'restaurant',
-      'dining': 'restaurant',
-      'cafe': 'cafe',
-      'cafes': 'cafe',
-      'coffee': 'cafe',
-      'bar': 'bar',
-      'bars': 'bar',
-      'pub': 'pub',
-      'pubs': 'pub',
+      'restaurant': { icon: '🍽️', category: 'food' },
+      'cafe': { icon: '☕', category: 'food' },
+      'bar': { icon: '🍷', category: 'food' },
+      'pub': { icon: '🍺', category: 'food' },
+      'fast_food': { icon: '🍔', category: 'food' },
+      'food_court': { icon: '🍴', category: 'food' },
+      'bakery': { icon: '🥐', category: 'food' },
       
-      // Healthcare
-      'hospital': 'hospital',
-      'hospitals': 'hospital',
-      'clinic': 'clinic',
-      'clinics': 'clinic',
-      'doctor': 'doctors',
-      'doctors': 'doctors',
-      'pharmacy': 'pharmacy',
-      'pharmacies': 'pharmacy',
-      'medical': 'hospital',
-      'healthcare': 'hospital',
+      // Shopping
+      'supermarket': { icon: '🛒', category: 'shopping' },
+      'mall': { icon: '🛍️', category: 'shopping' },
+      'marketplace': { icon: '🏪', category: 'shopping' },
+      'department_store': { icon: '🏬', category: 'shopping' },
+      'convenience': { icon: '🏪', category: 'shopping' },
+      
+      // Health
+      'hospital': { icon: '🏥', category: 'health' },
+      'clinic': { icon: '🏥', category: 'health' },
+      'doctors': { icon: '👨‍⚕️', category: 'health' },
+      'dentist': { icon: '🦷', category: 'health' },
+      'pharmacy': { icon: '💊', category: 'health' },
       
       // Transportation
+      'bus_station': { icon: '🚌', category: 'transport' },
+      'bus_stop': { icon: '🚏', category: 'transport' },
+      'train_station': { icon: '🚆', category: 'transport' },
+      'subway_entrance': { icon: '🚇', category: 'transport' },
+      'taxi': { icon: '🚕', category: 'transport' },
+      'fuel': { icon: '⛽', category: 'transport' },
+      'car_rental': { icon: '🚗', category: 'transport' },
+      'bicycle_rental': { icon: '🚲', category: 'transport' },
+      
+      // Entertainment
+      'cinema': { icon: '🎬', category: 'entertainment' },
+      'theatre': { icon: '🎭', category: 'entertainment' },
+      'arts_centre': { icon: '🎨', category: 'entertainment' },
+      'museum': { icon: '🏛️', category: 'entertainment' },
+      'nightclub': { icon: '💃', category: 'entertainment' },
+      'park': { icon: '🌳', category: 'entertainment' },
+      'playground': { icon: '🛝', category: 'entertainment' },
+      
+      // Services
+      'bank': { icon: '🏦', category: 'services' },
+      'atm': { icon: '💰', category: 'services' },
+      'post_office': { icon: '📮', category: 'services' },
+      'police': { icon: '👮', category: 'services' },
+      'fire_station': { icon: '🚒', category: 'services' },
+      'library': { icon: '📚', category: 'services' },
+      'school': { icon: '🏫', category: 'services' },
+      'university': { icon: '🎓', category: 'services' },
+      'college': { icon: '🎓', category: 'services' },
+      'place_of_worship': { icon: '🙏', category: 'services' },
+      'hotel': { icon: '🏨', category: 'services' },
+      'embassy': { icon: '🏢', category: 'services' },
+      'toilets': { icon: '🚻', category: 'services' }
+    };
+  }
+  
+  // Utility to convert user query to OSM amenity tag
+  convertQueryToAmenity(query) {
+    const queryLower = query.toLowerCase().trim();
+    
+    // Direct mapping for common search terms
+    const directMapping = {
+      'restaurant': 'restaurant',
+      'food': 'restaurant',
+      'cafe': 'cafe',
+      'coffee': 'cafe',
+      'bar': 'bar',
+      'pub': 'pub',
+      'hospital': 'hospital',
+      'doctor': 'doctors',
+      'clinic': 'clinic',
+      'pharmacy': 'pharmacy',
+      'chemist': 'pharmacy',
+      'drug store': 'pharmacy',
+      'hotel': 'hotel',
+      'atm': 'atm',
+      'bank': 'bank',
+      'police': 'police',
       'gas': 'fuel',
       'gas station': 'fuel',
       'petrol': 'fuel',
-      'fuel': 'fuel',
+      'bus': 'bus_stop',
       'bus stop': 'bus_stop',
-      'bus station': 'bus_station',
       'train': 'train_station',
       'train station': 'train_station',
-      'railway': 'train_station',
-      'airport': 'airport',
-      'taxi': 'taxi',
-      
-      // Financial
-      'bank': 'bank',
-      'banks': 'bank',
-      'atm': 'atm',
-      'atms': 'atm',
-      
-      // Shopping
-      'supermarket': 'supermarket',
-      'supermarkets': 'supermarket',
-      'grocery': 'supermarket',
-      'groceries': 'supermarket',
-      'shop': 'shop',
-      'shops': 'shop',
-      'shopping': 'mall',
-      'mall': 'mall',
-      'malls': 'mall',
-      
-      // Accommodation
-      'hotel': 'hotel',
-      'hotels': 'hotel',
-      'motel': 'hotel',
-      'hostel': 'hostel',
-      'lodging': 'hotel',
-      
-      // Entertainment
-      'cinema': 'cinema',
-      'cinemas': 'cinema',
-      'movie': 'cinema',
-      'movies': 'cinema',
-      'theater': 'theatre',
-      'theatre': 'theatre',
-      'museum': 'museum',
-      'museums': 'museum',
-      'gallery': 'art_gallery',
-      'park': 'park',
-      'parks': 'park',
-      
-      // Education
       'school': 'school',
-      'college': 'college',
       'university': 'university',
-      'library': 'library',
-      'libraries': 'library',
-      
-      // Other
-      'police': 'police',
+      'college': 'college',
+      'cinema': 'cinema',
+      'movie': 'cinema',
+      'theatre': 'theatre',
+      'theater': 'theatre',
+      'supermarket': 'supermarket',
+      'grocery': 'supermarket',
+      'mall': 'mall',
+      'shopping mall': 'mall',
       'post office': 'post_office',
-      'post': 'post_office',
+      'park': 'park',
+      'garden': 'park',
+      'library': 'library',
       'church': 'place_of_worship',
       'temple': 'place_of_worship',
       'mosque': 'place_of_worship',
-      'worship': 'place_of_worship',
-      'religious': 'place_of_worship'
+      'synagogue': 'place_of_worship',
+      'toilet': 'toilets',
+      'restroom': 'toilets',
+      'bathroom': 'toilets'
     };
+    
+    // First try direct mapping
+    if (directMapping[queryLower]) {
+      return directMapping[queryLower];
+    }
+    
+    // Then try partial matching
+    for (const [key, value] of Object.entries(directMapping)) {
+      if (queryLower.includes(key)) {
+        return value;
+      }
+    }
+    
+    // Default to the original query if no match found
+    return queryLower;
   }
-
-  async findNearby(lat, lng, category, radiusKm = 2, limit = 20) {
-    try {
-      // Rate limiting
-      const now = Date.now();
-      const timeSinceLastRequest = now - this.lastRequestTime;
-      if (timeSinceLastRequest < this.rateLimitDelay) {
-        await new Promise(resolve => setTimeout(resolve, this.rateLimitDelay - timeSinceLastRequest));
-      }
-
-      // Check cache
-      const cacheKey = `${lat}_${lng}_${category}_${radiusKm}_${limit}`;
-      if (this.cache.has(cacheKey)) {
-        return this.cache.get(cacheKey);
-      }
-
-      const categoryConfig = this.categories[category] || this.categories['restaurant'];
-      const radiusMeters = radiusKm * 1000;
-
-      // Build Overpass QL query
-      const query = `
-        [out:json][timeout:25];
-        (
-          node[${categoryConfig.query}](around:${radiusMeters},${lat},${lng});
-          way[${categoryConfig.query}](around:${radiusMeters},${lat},${lng});
-          relation[${categoryConfig.query}](around:${radiusMeters},${lat},${lng});
-        );
-        out center meta ${limit};
-      `;
-
-      this.lastRequestTime = Date.now();
-      
-      // Perform the request with error handling
-      const response = await fetch(this.overpassUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: `data=${encodeURIComponent(query)}`,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Overpass API request failed: ${response.status}`);
-      }
-
-      const data = await response.json();
-      
-      // Process the results
-      const results = this.processOverpassData(data, categoryConfig);
-      
-      // Add distance and sort by proximity
-      const poisWithDistance = this.addDistanceAndSort(results, lat, lng);
-      
-      // Cache the result
-      this.cache.set(cacheKey, poisWithDistance);
-      
-      // Clean cache if it gets too big
-      if (this.cache.size > 50) {
-        // Delete oldest entry
-        const firstKey = this.cache.keys().next().value;
-        this.cache.delete(firstKey);
-      }
-      
-      return poisWithDistance;
-    } catch (error) {
-      console.error('POI search error:', error);
-      
-      // In case of error, return empty array
-      return [];
-    }
+  
+  // Get cache key for a nearby query
+  getCacheKey(lat, lng, query, radius) {
+    const latRounded = parseFloat(lat).toFixed(4);
+    const lngRounded = parseFloat(lng).toFixed(4);
+    const radiusRounded = Math.round(radius * 10) / 10;
+    return `nearby:${latRounded},${lngRounded}:${query}:${radiusRounded}`;
   }
-
-  processOverpassData(data, categoryConfig) {
-    if (!data.elements) {
-      return [];
+  
+  // Check cache for results
+  getFromCache(key) {
+    if (!this.cache.has(key)) return null;
+    
+    const cachedData = this.cache.get(key);
+    const now = Date.now();
+    
+    // Check if data is expired
+    if (now - cachedData.timestamp > this.cacheTTL) {
+      this.cache.delete(key);
+      return null;
     }
-
-    return data.elements.map(element => {
-      try {
-        // Check if it's a way/relation with a center point
-        const lat = element.center ? element.center.lat : element.lat;
-        const lng = element.center ? element.center.lon : element.lon;
-        
-        if (!lat || !lng) {
-          return null;
-        }
-        
-        // Get the name from tags
-        const name = element.tags?.name || 
-                    (element.tags?.brand || element.tags?.operator) || 
-                    `${categoryConfig.name} #${element.id.toString().substring(0, 4)}`;
-        
-        return {
-          id: element.id.toString(),
-          name: name,
-          lat: lat,
-          lng: lng,
-          category: categoryConfig.name,
-          icon: categoryConfig.icon,
-          address: this.buildAddress(element.tags),
-          phone: element.tags?.phone || element.tags?.['contact:phone'],
-          website: element.tags?.website || element.tags?.url,
-          openingHours: element.tags?.opening_hours
-        };
-      } catch (e) {
-        console.error('Error processing POI element:', e);
-        return null;
-      }
-    }).filter(poi => poi !== null);
+    
+    return cachedData.data;
   }
-
-  buildAddress(tags) {
-    const parts = [];
-    
-    if (tags['addr:housenumber']) {
-      parts.push(tags['addr:housenumber']);
+  
+  // Add results to cache
+  addToCache(key, data) {
+    // Maintain cache size
+    if (this.cache.size >= this.cacheSize) {
+      // Remove oldest entry
+      const oldestKey = [...this.cache.keys()][0];
+      this.cache.delete(oldestKey);
     }
     
-    if (tags['addr:street']) {
-      parts.push(tags['addr:street']);
-    }
-    
-    if (tags['addr:city']) {
-      parts.push(tags['addr:city']);
-    }
-    
-    if (tags['addr:postcode']) {
-      parts.push(tags['addr:postcode']);
-    }
-    
-    return parts.length > 0 ? parts.join(', ') : null;
+    this.cache.set(key, {
+      data,
+      timestamp: Date.now()
+    });
   }
-
-  // Calculate distance between two points
-  calculateDistance(lat1, lng1, lat2, lng2) {
+  
+  // Calculate distance between two coordinates (haversine formula)
+  calculateDistance(lat1, lon1, lat2, lon2) {
     const R = 6371; // Earth's radius in km
     const dLat = this.toRadians(lat2 - lat1);
-    const dLng = this.toRadians(lng2 - lng1);
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-              Math.cos(this.toRadians(lat1)) * Math.cos(this.toRadians(lat2)) *
-              Math.sin(dLng / 2) * Math.sin(dLng / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const dLon = this.toRadians(lon2 - lon1);
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(this.toRadians(lat1)) * Math.cos(this.toRadians(lat2)) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     return R * c;
   }
-
+  
+  // Convert degrees to radians
   toRadians(degrees) {
-    return degrees * (Math.PI / 180);
+    return degrees * Math.PI / 180;
   }
-
-  // Add distance to POIs and sort by distance
-  addDistanceAndSort(pois, centerLat, centerLng) {
-    return pois.map(poi => ({
-      ...poi,
-      distance: this.calculateDistance(centerLat, centerLng, poi.lat, poi.lng)
-    })).sort((a, b) => a.distance - b.distance);
+  
+  // Get icon for an amenity
+  getIcon(amenity) {
+    return this.amenityCategories[amenity]?.icon || '📍';
   }
-
-  // Smart category detection from voice commands
-  detectCategory(query) {
-    if (!query || typeof query !== 'string') return null;
-    
-    const normalizedQuery = query.toLowerCase();
-    
-    // Try direct match first
-    for (const [keyword, category] of Object.entries(this.categoryMap)) {
-      if (normalizedQuery.includes(keyword)) {
-        return category;
-      }
+  
+  // Get category for an amenity
+  getCategory(amenity) {
+    return this.amenityCategories[amenity]?.category || 'other';
+  }
+  
+  // Search for points of interest near a location
+  async findNearby(lat, lng, query, options = {}) {
+    if (!lat || !lng || !query) {
+      console.error('Invalid parameters for nearby search');
+      return { results: [] };
     }
     
-    // If no direct match, make an educated guess using word similarity
-    const words = normalizedQuery.split(/\s+/);
-    for (const word of words) {
-      if (word.length > 3) { // Only consider words longer than 3 characters
-        for (const [keyword, category] of Object.entries(this.categoryMap)) {
-          // Simple prefix matching
-          if (keyword.startsWith(word) || word.startsWith(keyword)) {
-            return category;
+    const radius = options.radius || 2.0; // Default 2km radius
+    const limit = options.limit || 20; // Default 20 results
+    
+    // Check cache first
+    const cacheKey = this.getCacheKey(lat, lng, query, radius);
+    const cachedResults = this.getFromCache(cacheKey);
+    if (cachedResults) {
+      console.log('Using cached results for', query);
+      return cachedResults;
+    }
+    
+    try {
+      // Use backend proxy to respect API usage policies
+      const response = await fetch(this.backendNearbyEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          lat: parseFloat(lat),
+          lng: parseFloat(lng),
+          query: query,
+          radius_km: radius,
+          limit: limit
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Backend nearby search error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      // Enhance the results with additional information
+      if (data.results && Array.isArray(data.results)) {
+        data.results.forEach(item => {
+          // Add icon based on amenity
+          const amenity = this.convertQueryToAmenity(query);
+          item.icon = this.getIcon(amenity);
+          item.category = this.getCategory(amenity);
+          
+          // Calculate distance if not provided
+          if (!item.distance && item.lat && item.lng) {
+            item.distance = this.calculateDistance(lat, lng, item.lat, item.lng);
           }
-        }
+        });
+        
+        // Sort by distance
+        data.results.sort((a, b) => (a.distance || Infinity) - (b.distance || Infinity));
       }
+      
+      // Cache the results
+      this.addToCache(cacheKey, data);
+      
+      return data;
+    } catch (error) {
+      console.error('Error searching for nearby POIs:', error);
+      return { results: [] };
     }
-    
-    // Default to a reasonable category if no match
-    if (normalizedQuery.includes('find') || normalizedQuery.includes('search')) {
-      return 'restaurant'; // Most commonly searched POI
-    }
-    
-    return null;
   }
-
-  getAvailableCategories() {
-    return Object.entries(this.categories).map(([key, config]) => ({
-      id: key,
-      name: config.name,
-      icon: config.icon
-    }));
+  
+  // Get categories for filtering
+  getCategories() {
+    // Deduplicate categories
+    const uniqueCategories = new Set();
+    
+    Object.values(this.amenityCategories).forEach(info => {
+      if (info.category) {
+        uniqueCategories.add(info.category);
+      }
+    });
+    
+    // Convert to array and format
+    return Array.from(uniqueCategories).map(category => {
+      return {
+        id: category,
+        name: category.charAt(0).toUpperCase() + category.slice(1),
+        icon: this.getCategoryIcon(category)
+      };
+    });
+  }
+  
+  // Get representative icon for a category
+  getCategoryIcon(category) {
+    const mapping = {
+      'food': '🍽️',
+      'shopping': '🛍️',
+      'health': '🏥',
+      'transport': '🚌',
+      'entertainment': '🎭',
+      'services': '🏢',
+      'other': '📍'
+    };
+    
+    return mapping[category] || '📍';
+  }
+  
+  // Check if a location is open now (based on OSM opening_hours tag)
+  isOpenNow(openingHours) {
+    if (!openingHours) return null; // Unknown status
+    
+    // This would require a full OpeningHours parser to handle complex formats
+    // For now, returning a simplified check
+    if (openingHours.includes('24/7')) return true;
+    
+    // For a basic implementation, we would return null (unknown)
+    // A full implementation would use a library like opening_hours.js
+    return null;
   }
 }
 
 // Create and export singleton instance
 export const poiService = new POIService();
-export default POIService;

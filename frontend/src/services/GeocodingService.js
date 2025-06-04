@@ -2,222 +2,277 @@
 
 class GeocodingService {
   constructor() {
-    this.baseUrl = 'https://nominatim.openstreetmap.org';
-    this.userAgent = 'AakashVaaniApp/1.0';
-    this.searchCache = new Map();
-    this.reverseCache = new Map();
+    // Configure API endpoints
+    this.searchEndpoint = 'https://nominatim.openstreetmap.org/search';
+    this.reverseEndpoint = 'https://nominatim.openstreetmap.org/reverse';
+    
+    // Backend proxy endpoints (for production)
+    this.backendURL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
+    this.backendSearchEndpoint = `${this.backendURL}/geocode`;
+    this.backendReverseEndpoint = `${this.backendURL}/reverse-geocode`;
+    
+    // Use backend by default to respect API usage policies
+    this.useBackend = true;
+    
+    // Cache settings
+    this.cache = new Map();
+    this.cacheSize = 100;
+    this.cacheTTL = 24 * 60 * 60 * 1000; // 24 hours
+    
+    // Request settings
+    this.defaultParams = {
+      format: 'json',
+      addressdetails: 1,
+      limit: 10
+    };
+    
+    // Add a user agent for OSM's Nominatim Usage Policy
+    this.headers = {
+      'User-Agent': 'AakashVaani/1.0'
+    };
   }
 
   // Format coordinates for cache key
   formatCoords(lat, lng) {
-    return `${parseFloat(lat).toFixed(6)},${parseFloat(lng).toFixed(6)}`;
+    return `${parseFloat(lat).toFixed(5)},${parseFloat(lng).toFixed(5)}`;
   }
-  
-  // Forward geocoding - search for a place
-  async search(query, limit = 5) {
-    // Return from cache if available
-    const cacheKey = query.toLowerCase().trim();
-    if (this.searchCache.has(cacheKey)) {
-      return this.searchCache.get(cacheKey);
+
+  // Get from cache
+  getFromCache(key) {
+    const cached = this.cache.get(key);
+    if (!cached) return null;
+    
+    // Check if cache entry has expired
+    if (Date.now() - cached.timestamp > this.cacheTTL) {
+      this.cache.delete(key);
+      return null;
     }
     
+    return cached.data;
+  }
+
+  // Add to cache
+  addToCache(key, data) {
+    // Limit cache size with LRU approach
+    if (this.cache.size >= this.cacheSize) {
+      // Delete oldest entry
+      const oldestKey = this.cache.keys().next().value;
+      this.cache.delete(oldestKey);
+    }
+    
+    this.cache.set(key, {
+      data,
+      timestamp: Date.now()
+    });
+  }
+
+  // Search for places by name
+  async search(query, options = {}) {
+    if (!query) return [];
+    
+    // Check cache first
+    const cacheKey = `search:${query}:${JSON.stringify(options)}`;
+    const cachedResults = this.getFromCache(cacheKey);
+    if (cachedResults) return cachedResults;
+    
     try {
-      const params = new URLSearchParams({
-        q: query,
-        format: 'json',
-        limit: limit,
-        addressdetails: 1,
-        'accept-language': 'en'
-      });
+      let results;
       
-      const url = `${this.baseUrl}/search?${params.toString()}`;
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': this.userAgent
+      if (this.useBackend) {
+        // Use backend proxy to respect API usage policies
+        const response = await fetch(this.backendSearchEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            query,
+            limit: options.limit || this.defaultParams.limit,
+            country_code: options.countryCode
+          })
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Backend geocoding error: ${response.status}`);
         }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Geocoding error: ${response.status}`);
+        
+        results = await response.json();
+      } else {
+        // Direct API call (not recommended for production)
+        const params = new URLSearchParams({
+          ...this.defaultParams,
+          q: query,
+          limit: options.limit || this.defaultParams.limit
+        });
+        
+        if (options.countryCode) {
+          params.append('countrycodes', options.countryCode);
+        }
+        
+        const response = await fetch(`${this.searchEndpoint}?${params}`, {
+          headers: this.headers
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Geocoding API error: ${response.status}`);
+        }
+        
+        results = await response.json();
       }
       
-      const data = await response.json();
-      
-      // Parse the response into a simplified format
-      const results = data.map(result => ({
-        id: result.place_id,
-        lat: parseFloat(result.lat),
-        lng: parseFloat(result.lon),
-        displayName: result.display_name,
-        type: result.type,
-        importance: result.importance,
-        address: result.address,
-        boundingBox: result.boundingbox?.map(parseFloat)
+      // Format results
+      const formattedResults = results.map(item => ({
+        id: item.place_id || item.osm_id,
+        name: item.name || item.display_name,
+        type: item.type || 'place',
+        lat: parseFloat(item.lat),
+        lng: parseFloat(item.lon),
+        address: item.address || {},
+        raw: item
       }));
       
-      // Cache the results
-      this.searchCache.set(cacheKey, results);
+      // Cache results
+      this.addToCache(cacheKey, formattedResults);
       
-      return results;
+      return formattedResults;
     } catch (error) {
-      console.error('Geocoding search error:', error);
+      console.error('Error during geocoding search:', error);
       return [];
     }
   }
-  
-  // Reverse geocoding - get place from coordinates
-  async reverseGeocode(lat, lng) {
-    // Return from cache if available
-    const cacheKey = this.formatCoords(lat, lng);
-    if (this.reverseCache.has(cacheKey)) {
-      return this.reverseCache.get(cacheKey);
-    }
+
+  // Get details for coordinates
+  async reverseGeocode(lat, lng, options = {}) {
+    if (!lat || !lng) return null;
+    
+    // Check cache first
+    const cacheKey = `reverse:${this.formatCoords(lat, lng)}:${options.zoom || 18}`;
+    const cachedResult = this.getFromCache(cacheKey);
+    if (cachedResult) return cachedResult;
     
     try {
-      const params = new URLSearchParams({
-        lat: lat,
-        lon: lng,
-        format: 'json',
-        addressdetails: 1,
-        zoom: 18,
-        'accept-language': 'en'
-      });
+      let result;
       
-      const url = `${this.baseUrl}/reverse?${params.toString()}`;
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': this.userAgent
+      if (this.useBackend) {
+        // Use backend proxy
+        const response = await fetch(this.backendReverseEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            lat: parseFloat(lat),
+            lng: parseFloat(lng),
+            zoom: options.zoom || 18
+          })
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Backend reverse geocoding error: ${response.status}`);
         }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Reverse geocoding error: ${response.status}`);
+        
+        result = await response.json();
+      } else {
+        // Direct API call (not recommended for production)
+        const params = new URLSearchParams({
+          ...this.defaultParams,
+          lat: lat,
+          lon: lng,
+          zoom: options.zoom || 18,
+          addressdetails: 1
+        });
+        
+        const response = await fetch(`${this.reverseEndpoint}?${params}`, {
+          headers: this.headers
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Reverse geocoding API error: ${response.status}`);
+        }
+        
+        result = await response.json();
       }
       
-      const result = await response.json();
-      
-      // Parse the response into a simplified format
+      // Format result
       const formattedResult = {
-        id: result.place_id,
+        id: result.place_id || result.osm_id,
+        name: result.name || result.display_name,
+        type: result.type || 'place',
         lat: parseFloat(result.lat),
         lng: parseFloat(result.lon),
-        displayName: result.display_name,
-        type: result.type,
-        address: result.address,
+        address: result.address || {},
+        raw: result
       };
       
-      // Cache the result
-      this.reverseCache.set(cacheKey, formattedResult);
+      // Cache result
+      this.addToCache(cacheKey, formattedResult);
       
       return formattedResult;
     } catch (error) {
-      console.error('Reverse geocoding error:', error);
+      console.error('Error during reverse geocoding:', error);
       return null;
     }
   }
-  
-  // Smart search with better handling of ambiguous queries
-  async smartSearch(query, limit = 5) {
-    // Check if query looks like coordinates
-    const coordsRegex = /^\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*$/;
-    const coordsMatch = query.match(coordsRegex);
+
+  // Smart search combining geocoding and nearby POI search
+  async smartSearch(query, options = {}) {
+    if (!query) return [];
     
-    if (coordsMatch) {
-      const lat = parseFloat(coordsMatch[1]);
-      const lng = parseFloat(coordsMatch[2]);
-      
-      // Validate lat/lng
-      if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
-        const result = await this.reverseGeocode(lat, lng);
-        
-        if (result) {
-          return [result];
-        }
-      }
-    }
-    
-    // Handle special query modifiers
-    let processedQuery = query;
-    let viewbox = null;
-    
-    // Check for "near [place]" pattern
-    const nearPattern = /near\s+(.+)$/i;
-    const nearMatch = query.match(nearPattern);
-    
-    if (nearMatch) {
-      // First, geocode the reference location
-      const referencePlace = nearMatch[1];
-      const referencePlaceResults = await this.search(referencePlace, 1);
-      
-      if (referencePlaceResults.length > 0) {
-        const refLocation = referencePlaceResults[0];
-        // Create a viewbox around the reference location (roughly 10km square)
-        const delta = 0.1; // ~10km
-        viewbox = [
-          refLocation.lng - delta, 
-          refLocation.lat - delta, 
-          refLocation.lng + delta, 
-          refLocation.lat + delta
-        ].join(',');
-        
-        // Remove the "near [place]" part for the main search
-        processedQuery = query.replace(nearPattern, '').trim();
-      }
-    }
-    
-    // Perform the main search
     try {
-      const params = new URLSearchParams({
-        q: processedQuery,
-        format: 'json',
-        limit: limit,
-        addressdetails: 1,
-        'accept-language': 'en'
-      });
+      // First try regular geocoding
+      const geocodeResults = await this.search(query, options);
       
-      // Add viewbox if we have one
-      if (viewbox) {
-        params.append('viewbox', viewbox);
-        params.append('bounded', '1');
+      // If we have results, return them
+      if (geocodeResults && geocodeResults.length > 0) {
+        return geocodeResults;
       }
       
-      const url = `${this.baseUrl}/search?${params.toString()}`;
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': this.userAgent
+      // If no results and we have current location, try nearby search
+      if (options.lat && options.lng) {
+        const nearbyParams = {
+          lat: options.lat,
+          lng: options.lng,
+          query: query,
+          radius_km: options.radius || 2
+        };
+        
+        const response = await fetch(`${this.backendURL}/nearby`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(nearbyParams)
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Backend nearby search error: ${response.status}`);
         }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Geocoding error: ${response.status}`);
+        
+        const nearbyResults = await response.json();
+        
+        // Format nearby results
+        if (nearbyResults && nearbyResults.results) {
+          return nearbyResults.results.map(item => ({
+            id: item.id,
+            name: item.name,
+            type: item.type,
+            lat: item.lat,
+            lng: item.lng,
+            address: item.address || {},
+            distance: item.distance,
+            raw: item
+          }));
+        }
       }
       
-      const data = await response.json();
-      
-      // Parse the response into a simplified format
-      const results = data.map(result => ({
-        id: result.place_id,
-        lat: parseFloat(result.lat),
-        lng: parseFloat(result.lon),
-        displayName: result.display_name,
-        type: result.type,
-        importance: result.importance,
-        address: result.address,
-        boundingBox: result.boundingbox?.map(parseFloat)
-      }));
-      
-      return results;
+      return [];
     } catch (error) {
-      console.error('Smart search error:', error);
+      console.error('Error during smart search:', error);
       return [];
     }
   }
-  
-  // Clear caches
-  clearCaches() {
-    this.searchCache.clear();
-    this.reverseCache.clear();
-  }
 }
 
+// Create and export singleton instance
 export const geocodingService = new GeocodingService();
+export default GeocodingService;
