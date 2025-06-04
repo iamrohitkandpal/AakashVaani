@@ -3,65 +3,155 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Aakash Vaani - Offline</title>
+  <title>Offline - Aakash Vaani</title>
   <style>
     body {
-      font-family: 'Inter', -apple-system, sans-serif;
-      background: #040b18;
-      color: #e0e6ed;
-      text-align: center;
-      padding: 2rem;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+        Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      background-color: #111827;
+      color: #f3f4f6;
       margin: 0;
+      padding: 0;
       height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
     }
+    
     .container {
-      max-width: 500px;
-      background: rgba(15, 23, 42, 0.75);
+      text-align: center;
+      max-width: 600px;
       padding: 2rem;
-      border-radius: 12px;
-      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.19);
+      background-color: #1f2937;
+      border-radius: 0.75rem;
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
     }
+    
     h1 {
-      font-size: 1.8rem;
+      font-size: 1.875rem;
       margin-bottom: 1rem;
       color: #ffffff;
     }
+    
+    p {
+      font-size: 1rem;
+      margin-bottom: 1.5rem;
+      color: #d1d5db;
+    }
+    
     .icon {
-      font-size: 3rem;
+      font-size: 4rem;
       margin-bottom: 1.5rem;
     }
-    .message {
-      margin-bottom: 1.5rem;
-      line-height: 1.6;
-    }
+    
     .retry-button {
-      padding: 0.8rem 1.5rem;
-      background: #4285f4;
+      background-color: #2563eb;
       color: white;
       border: none;
-      border-radius: 6px;
+      border-radius: 0.375rem;
+      padding: 0.75rem 1.5rem;
       font-size: 1rem;
+      font-weight: 500;
       cursor: pointer;
-      transition: background-color 0.3s ease;
+      transition: background-color 0.2s ease;
     }
+    
     .retry-button:hover {
-      background: #5797ff;
+      background-color: #1e40af;
+    }
+    
+    .cached-content {
+      margin-top: 2rem;
+      border-top: 1px solid #4b5563;
+      padding-top: 1rem;
+    }
+    
+    .cached-list {
+      list-style: none;
+      padding: 0;
+      margin: 1rem 0;
+      text-align: left;
+    }
+    
+    .cached-list li {
+      margin-bottom: 0.5rem;
+      padding: 0.5rem;
+      background-color: #374151;
+      border-radius: 0.25rem;
+    }
+    
+    .cached-list li a {
+      color: #93c5fd;
+      text-decoration: none;
+    }
+    
+    .cached-list li a:hover {
+      text-decoration: underline;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="icon">📡</div>
-    <h1>No Internet Connection</h1>
-    <div class="message">
-      Aakash Vaani needs an internet connection to load maps and process voice commands.
-      Some cached features may still work when you're back online.
+    <div class="icon">🛰️</div>
+    <h1>You're currently offline</h1>
+    <p>It seems you've lost your connection. Don't worry, some features of Aakash Vaani are still available offline.</p>
+    
+    <button class="retry-button" onclick="retryConnection()">
+      Retry Connection
+    </button>
+    
+    <div class="cached-content">
+      <h2>Available Offline</h2>
+      <p>You can still access these previously visited pages:</p>
+      <ul class="cached-list" id="cached-pages">
+        <li>Loading cached pages...</li>
+      </ul>
     </div>
-    <button class="retry-button" onclick="window.location.reload()">Try Again</button>
   </div>
+
+  <script>
+    // Function to retry connection
+    function retryConnection() {
+      window.location.reload();
+    }
+    
+    // Load available cached pages
+    async function loadCachedPages() {
+      try {
+        const cache = await caches.open('aakash-vaani-v1');
+        const keys = await cache.keys();
+        const htmlPages = keys.filter(request => 
+          request.url.endsWith('.html') || 
+          request.url.endsWith('/') || 
+          !request.url.includes('.')
+        );
+        
+        const cachedList = document.getElementById('cached-pages');
+        
+        if (htmlPages.length === 0) {
+          cachedList.innerHTML = '<li>No cached pages available</li>';
+          return;
+        }
+        
+        cachedList.innerHTML = htmlPages
+          .map(request => {
+            const url = new URL(request.url);
+            const path = url.pathname;
+            const displayPath = path === '/' ? 'Home' : path;
+            return `<li><a href="${path}">${displayPath}</a></li>`;
+          })
+          .join('');
+          
+      } catch (error) {
+        console.error('Error loading cached pages:', error);
+        document.getElementById('cached-pages').innerHTML = 
+          '<li>Could not load cached pages</li>';
+      }
+    }
+    
+    // Run when page loads
+    loadCachedPages();
+  </script>
 </body>
 </html>
