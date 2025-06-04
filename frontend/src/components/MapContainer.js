@@ -1,5 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, memo, useMemo } from 'react';
-import { MapContainer as LeafletMapContainer, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { wmsService } from '../services/WMSService';
@@ -12,377 +11,279 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-// Enhanced Map event handler component with WMS support
-const MapEventHandler = memo(({ onMapReady, onLocationUpdate, currentLayer, activeLayers }) => {
-  const map = useMap();
-  const wmsLayersRef = useRef(new Map());
+const DEFAULT_CENTER = [28.6139, 77.209]; // New Delhi coordinates
+const DEFAULT_ZOOM = 13;
 
-  useEffect(() => {
-    if (map && onMapReady) {
-      onMapReady(map);
-    }
-  }, [map, onMapReady]);
-
-  // Handle WMS layer changes efficiently
-  useEffect(() => {
-    if (!map) return;
-
-    const currentLayers = new Set(wmsLayersRef.current.keys());
-    
-    // Find layers to remove
-    currentLayers.forEach(layerId => {
-      if (!activeLayers.has(layerId)) {
-        const layer = wmsLayersRef.current.get(layerId);
-        if (layer) {
-          map.removeLayer(layer);
-          wmsLayersRef.current.delete(layerId);
-        }
-      }
-    });
-
-    // Add new layers
-    activeLayers.forEach(layerId => {
-      if (!wmsLayersRef.current.has(layerId)) {
-        const layerConfig = wmsService.getLayer(layerId);
-        
-        if (layerConfig) {
-          try {
-            let leafletLayer = null;
-            
-            // Make sure URL is defined before proceeding
-            if (!layerConfig.url) {
-              console.warn(`WMS layer ${layerId} has no URL defined`);
-              return;
-            }
-            
-            // Handle different layer types appropriately
-            if (layerConfig.url.includes('{z}')) {
-              // TileLayer format
-              const options = {
-                attribution: layerConfig.attribution || '',
-                maxZoom: layerConfig.maxZoom || 18,
-                opacity: 0.7
-              };
-              
-              // Only add subdomains if they are explicitly defined in the config
-              if (layerConfig.subdomains && Array.isArray(layerConfig.subdomains)) {
-                options.subdomains = layerConfig.subdomains;
-              }
-              
-              leafletLayer = L.tileLayer(layerConfig.url, options);
-            } else if (layerConfig.layers) {
-              // WMS layer format
-              leafletLayer = L.tileLayer.wms(layerConfig.url, {
-                layers: layerConfig.layers,
-                format: layerConfig.format || 'image/png',
-                transparent: layerConfig.transparent !== false, // Default to true
-                attribution: layerConfig.attribution || '',
-                maxZoom: layerConfig.maxZoom || 18,
-                opacity: 0.7
-              });
-            }
-
-            if (leafletLayer) {
-              leafletLayer.addTo(map);
-              wmsLayersRef.current.set(layerId, leafletLayer);
-            }
-          } catch (error) {
-            console.warn(`Failed to add layer ${layerId}:`, error);
-          }
-        }
-      }
-    });
-  }, [map, activeLayers]);
-
-  // Map event handling
-  useMapEvents({
-    click(e) {
-      // Handle map clicks if needed
-      console.log(`Map clicked at: ${e.latlng.lat}, ${e.latlng.lng}`);
-    },
-    zoomend() {
-      // Handle zoom events if needed
-      const currentZoom = map.getZoom();
-      console.log(`Map zoom changed to: ${currentZoom}`);
-    },
-    moveend() {
-      // Handle move events if needed
-      const center = map.getCenter();
-      console.log(`Map moved to: ${center.lat}, ${center.lng}`);
-    }
+// Custom marker icons
+const createCustomIcon = (iconUrl, size = [25, 41], anchor = [12, 41]) => {
+  return L.icon({
+    iconUrl,
+    iconSize: size,
+    iconAnchor: anchor,
+    popupAnchor: [0, -41]
   });
+};
 
-  // Enhanced geolocation with better accuracy and error handling
-  useEffect(() => {
-    if (navigator.geolocation && map && onLocationUpdate) {
-      // Default location for India if geolocation fails
-      const defaultLocation = { lat: 20.5937, lng: 78.9629, accuracy: 1000 };
-      
-      // Set a timeout for geolocation
-      const geoTimeout = setTimeout(() => {
-        console.log("Geolocation timed out, using default location");
-        onLocationUpdate(defaultLocation);
-        
-        // Add default location marker
-        const marker = L.marker([defaultLocation.lat, defaultLocation.lng], {
-          icon: L.divIcon({
-            className: 'default-location-marker',
-            html: '📍',
-            iconSize: [30, 30],
-            iconAnchor: [15, 15]
-          })
-        }).addTo(map);
-        marker.bindPopup('Default Location (India)').openPopup();
-      }, 5000); // 5 seconds timeout
-      
-      // Try to get actual location
-      const watchId = navigator.geolocation.watchPosition(
-        (position) => {
-          // Clear the timeout since we got a position
-          clearTimeout(geoTimeout);
-          
-          const location = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-            accuracy: position.coords.accuracy
-          };
-          onLocationUpdate(location);
-          
-          // Add/update current location marker
-          if (map._currentLocationMarker) {
-            map.removeLayer(map._currentLocationMarker);
-          }
-          
-          const currentLocationMarker = L.marker([location.lat, location.lng], {
-            icon: L.divIcon({
-              className: 'current-location-marker',
-              html: '📍',
-              iconSize: [30, 30],
-              iconAnchor: [15, 15]
-            })
-          }).addTo(map);
-          
-          currentLocationMarker.bindPopup(`📍 Your Current Location<br><small>Accuracy: ${Math.round(location.accuracy)}m</small>`);
-          map._currentLocationMarker = currentLocationMarker;
-        },
-        (error) => {
-          // Clear the timeout since we got an error
-          clearTimeout(geoTimeout);
-          console.warn('Geolocation error:', error);
-          
-          // Use default location on error
-          onLocationUpdate(defaultLocation);
-          
-          // Add default location marker
-          const marker = L.marker([defaultLocation.lat, defaultLocation.lng], {
-            icon: L.divIcon({
-              className: 'default-location-marker',
-              html: '📍',
-              iconSize: [30, 30],
-              iconAnchor: [15, 15]
-            })
-          }).addTo(map);
-          marker.bindPopup('Default Location (India)').openPopup();
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 10000,
-          maximumAge: 60000 // Cache position for 1 minute
-        }
-      );
-      
-      return () => {
-        clearTimeout(geoTimeout);
-        navigator.geolocation.clearWatch(watchId);
-      };
-    }
-  }, [map, onLocationUpdate]);
+const locationIcon = createCustomIcon(
+  'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png'
+);
 
-  return null;
+const searchResultIcon = createCustomIcon(
+  'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png'
+);
+
+const pulsingLocationIcon = L.divIcon({
+  className: 'pulsing-location-marker',
+  html: '<div class="pulsing-dot"></div>',
+  iconSize: [20, 20],
+  iconAnchor: [10, 10]
 });
 
-// Main MapContainer component
-const MapContainer = memo(({ onMapReady, onLocationUpdate, voiceStatus, activeLayers = new Set(), currentLocation }) => {
-  const [isLoading, setIsLoading] = useState(true);
-  const [currentLayer, setCurrentLayer] = useState('street');
-  const [mapMetrics, setMapMetrics] = useState({
-    zoom: 6,
-    center: null,
-    bounds: null
-  });
+const MapContainer = ({
+  onMapReady,
+  onLocationUpdate,
+  voiceStatus,
+  activeLayers,
+  currentLocation,
+  searchResults,
+  center,
+  zoom,
+  isLoading
+}) => {
   const mapRef = useRef(null);
-
-  // Default center position (India)
-  const defaultPosition = [20.5937, 78.9629];
+  const mapInstanceRef = useRef(null);
+  const markersLayerRef = useRef(null);
+  const layerInstancesRef = useRef({});
+  const [initialized, setInitialized] = useState(false);
   
-  // Layer configurations
-  const layerConfigs = useMemo(() => ({
-    street: {
-      url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      attribution: '© OpenStreetMap contributors',
-      name: 'Street Map',
-      subdomains: ['a', 'b', 'c']
-    },
-    satellite: {
-      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      attribution: '© Esri, Maxar, GeoEye, Earthstar Geographics',
-      name: 'Satellite'
-    },
-    terrain: {
-      url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-      attribution: '© OpenTopoMap',
-      name: 'Terrain',
-      subdomains: ['a', 'b', 'c']
-    },
-    dark: {
-      url: 'https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',
-      attribution: '© CartoDB, © OpenStreetMap',
-      name: 'Dark Mode',
-      subdomains: ['a', 'b', 'c', 'd']
-    }
-  }), []);
-
-  // Callback for handling map ready event
-  const handleMapReady = useCallback((map) => {
-    setIsLoading(false);
-    mapRef.current = map;
-    
-    // Add scale control
-    L.control.scale({
-      metric: true,
-      imperial: false,
-      position: 'bottomleft'
-    }).addTo(map);
-
-    // Add coordinates display
-    const coordsControl = L.control({ position: 'bottomright' });
-    coordsControl.onAdd = function() {
-      const div = L.DomUtil.create('div', 'coords-control');
-      div.style.background = 'rgba(13, 31, 61, 0.8)';
-      div.style.padding = '4px 8px';
-      div.style.borderRadius = '4px';
-      div.style.color = '#3399ff';
-      div.style.fontSize = '0.7rem';
-      div.style.border = '1px solid rgba(51, 153, 255, 0.3)';
-      div.innerHTML = 'Hover to see coordinates';
-      return div;
-    };
-    coordsControl.addTo(map);
-
-    // Update coordinates on mouse move
-    map.on('mousemove', function(e) {
-      const coord = e.latlng;
-      const coordsDiv = document.querySelector('.coords-control');
-      if (coordsDiv) {
-        coordsDiv.innerHTML = `Lat: ${coord.lat.toFixed(6)}, Lng: ${coord.lng.toFixed(6)}`;
+  // Initialize map
+  useEffect(() => {
+    if (mapRef.current && !initialized) {
+      const initialCenter = center || DEFAULT_CENTER;
+      const initialZoom = zoom || DEFAULT_ZOOM;
+      
+      // Create map instance
+      const mapInstance = L.map(mapRef.current).setView(initialCenter, initialZoom);
+      
+      // Add base layer (OpenStreetMap)
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19
+      }).addTo(mapInstance);
+      
+      // Create a markers layer
+      const markersLayer = L.layerGroup().addTo(mapInstance);
+      
+      // Store references
+      mapInstanceRef.current = mapInstance;
+      markersLayerRef.current = markersLayer;
+      
+      // Call callback with map instance
+      if (onMapReady) {
+        onMapReady(mapInstance);
       }
-    });
-
-    // Track map metrics for UI display
-    map.on('moveend zoomend', () => {
-      setMapMetrics({
-        zoom: map.getZoom(),
-        center: map.getCenter(),
-        bounds: map.getBounds()
+      
+      setInitialized(true);
+      
+      // Cleanup function
+      return () => {
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.remove();
+          mapInstanceRef.current = null;
+        }
+      };
+    }
+  }, [onMapReady, initialized, center, zoom]);
+  
+  // Update map center and zoom when props change
+  useEffect(() => {
+    if (mapInstanceRef.current && center && zoom) {
+      mapInstanceRef.current.setView([center.lat, center.lng], zoom, {
+        animate: true,
+        duration: 1
       });
+    }
+  }, [center, zoom]);
+  
+  // Handle user location updates
+  useEffect(() => {
+    if (!mapInstanceRef.current || !markersLayerRef.current || !currentLocation) return;
+    
+    const map = mapInstanceRef.current;
+    const markersLayer = markersLayerRef.current;
+    
+    // Clear existing location markers
+    markersLayer.eachLayer(layer => {
+      if (layer.options.locationMarker) {
+        markersLayer.removeLayer(layer);
+      }
     });
     
-    // Add the setBaseLayer method to the map instance
-    map.setBaseLayer = function(layerType) {
-      if (layerConfigs[layerType]) {
-        setCurrentLayer(layerType);
+    // Add location marker
+    const marker = L.marker([currentLocation.lat, currentLocation.lng], {
+      icon: voiceStatus === 'listening' ? pulsingLocationIcon : locationIcon,
+      locationMarker: true,
+      zIndexOffset: 1000
+    }).addTo(markersLayer);
+    
+    marker.bindPopup('<b>Your Location</b>');
+    
+    // Add accuracy circle if available
+    if (currentLocation.accuracy) {
+      const circle = L.circle([currentLocation.lat, currentLocation.lng], {
+        radius: currentLocation.accuracy,
+        color: '#3388ff',
+        fillColor: '#3388ff',
+        fillOpacity: 0.1,
+        weight: 1,
+        locationMarker: true
+      }).addTo(markersLayer);
+    }
+  }, [currentLocation, voiceStatus]);
+  
+  // Update search results markers
+  useEffect(() => {
+    if (!mapInstanceRef.current || !markersLayerRef.current) return;
+    
+    const markersLayer = markersLayerRef.current;
+    
+    // Clear existing search result markers
+    markersLayer.eachLayer(layer => {
+      if (layer.options.searchResultMarker) {
+        markersLayer.removeLayer(layer);
+      }
+    });
+    
+    // Add markers for search results
+    if (searchResults && searchResults.length > 0) {
+      searchResults.forEach((result, index) => {
+        if (typeof result.lat === 'number' && typeof result.lng === 'number') {
+          const marker = L.marker([result.lat, result.lng], {
+            icon: searchResultIcon,
+            searchResultMarker: true,
+            zIndexOffset: 500
+          }).addTo(markersLayer);
+          
+          // Prepare popup content
+          let popupContent = `<div class="search-result-popup">`;
+          popupContent += `<h3>${result.name || 'Location'}</h3>`;
+          
+          if (result.address) {
+            const address = typeof result.address === 'string' 
+              ? result.address 
+              : Object.values(result.address).filter(Boolean).join(', ');
+            
+            popupContent += `<p>${address}</p>`;
+          }
+          
+          if (result.type) {
+            popupContent += `<p class="result-type">${result.type}</p>`;
+          }
+          
+          if (result.distance) {
+            popupContent += `<p class="result-distance">${
+              result.distance < 1 
+                ? `${Math.round(result.distance * 1000)}m` 
+                : `${result.distance.toFixed(1)}km`
+            } away</p>`;
+          }
+          
+          popupContent += `</div>`;
+          
+          // Add popup to marker
+          marker.bindPopup(popupContent);
+          
+          // Open popup for first result
+          if (index === 0 && searchResults.length === 1) {
+            marker.openPopup();
+          }
+        }
+      });
+    }
+  }, [searchResults]);
+  
+  // Update WMS layers
+  useEffect(() => {
+    if (!mapInstanceRef.current) return;
+    
+    const map = mapInstanceRef.current;
+    const currentLayerInstances = layerInstancesRef.current;
+    
+    // Get all available layers
+    const allLayers = wmsService.getAllLayers();
+    
+    // Check each layer against active layers Set
+    allLayers.forEach(layer => {
+      // Layer should be active
+      if (activeLayers.has(layer.id)) {
+        // Layer is not added yet
+        if (!currentLayerInstances[layer.id]) {
+          // Create and add WMS layer
+          const wmsLayer = L.tileLayer.wms(layer.url, {
+            layers: layer.name,
+            format: 'image/png',
+            transparent: true,
+            attribution: layer.attribution || 'WMS Layer'
+          });
+          
+          // Add to map and store reference
+          wmsLayer.addTo(map);
+          currentLayerInstances[layer.id] = wmsLayer;
+        }
+      } 
+      // Layer should not be active
+      else if (currentLayerInstances[layer.id]) {
+        // Remove layer from map
+        map.removeLayer(currentLayerInstances[layer.id]);
+        delete currentLayerInstances[layer.id];
+      }
+    });
+    
+    // Update reference
+    layerInstancesRef.current = currentLayerInstances;
+  }, [activeLayers]);
+  
+  // Add map event listeners
+  useEffect(() => {
+    if (!mapInstanceRef.current) return;
+    
+    const map = mapInstanceRef.current;
+    
+    // Track user location updates
+    const handleLocationFound = (e) => {
+      const { lat, lng, accuracy } = e.latlng;
+      if (onLocationUpdate) {
+        onLocationUpdate({ 
+          lat, 
+          lng, 
+          accuracy: e.accuracy 
+        });
       }
     };
     
-    if (onMapReady) {
-      onMapReady(map);
-    }
-  }, [onMapReady, layerConfigs]);
-
-  // Handle layer switching
-  const switchLayer = useCallback((layerType) => {
-    setCurrentLayer(layerType);
-  }, []);
-
-  // Get available WMS categories
-  const wmsCategories = useMemo(() => {
-    return wmsService.getCategories ? wmsService.getCategories().slice(0, 2) : [];
-  }, []);
-
+    map.on('locationfound', handleLocationFound);
+    
+    // Cleanup event listeners
+    return () => {
+      map.off('locationfound', handleLocationFound);
+    };
+  }, [onLocationUpdate]);
+  
   return (
     <div className="map-container">
       {isLoading && (
-        <div className="map-loading">
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>🛰️</div>
-            <div style={{ fontSize: '1rem', marginBottom: '0.5rem', color: '#fff' }}>
-              Loading Map...
-            </div>
-            <div style={{ 
-              fontSize: '0.8rem', 
-              color: '#a0aec0', 
-              marginTop: '0.5rem' 
-            }}>
-              Initializing geospatial services
-            </div>
-          </div>
+        <div className="map-loading-overlay">
+          <div className="loading-spinner"></div>
+          <p>Loading map data...</p>
         </div>
       )}
-      
-      <LeafletMapContainer
-        center={defaultPosition}
-        zoom={6}
-        style={{ height: '100%', width: '100%' }}
-        zoomControl={true}
-        scrollWheelZoom={true}
-        doubleClickZoom={true}
-        dragging={true}
-      >
-        <TileLayer
-          url={layerConfigs[currentLayer].url}
-          attribution={layerConfigs[currentLayer].attribution}
-          maxZoom={layerConfigs[currentLayer].maxZoom || 19}
-          subdomains={layerConfigs[currentLayer].subdomains}
-        />
-        
-        <MapEventHandler 
-          onMapReady={handleMapReady}
-          onLocationUpdate={onLocationUpdate}
-          currentLayer={currentLayer}
-          activeLayers={activeLayers}
-        />
-      </LeafletMapContainer>
-
-      {/* Layer Switcher */}
-      <div className="layer-switcher">
-        <div className="layer-switcher-title">Base Map</div>
-        <div className="layer-buttons">
-          {Object.entries(layerConfigs).map(([key, config]) => (
-            <button
-              key={key}
-              className={`layer-button ${currentLayer === key ? 'active' : ''}`}
-              onClick={() => switchLayer(key)}
-              aria-label={`Switch to ${config.name}`}
-            >
-              {config.name}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Voice status overlay */}
-      {voiceStatus === 'listening' && (
-        <div className="voice-listening-overlay">
-          <div className="voice-listening-indicator">
-            <div className="voice-pulse">
-              <span>🎤</span>
-            </div>
-            <div>Listening...</div>
-          </div>
-        </div>
-      )}
+      <div 
+        ref={mapRef} 
+        className="map-view" 
+        style={{ width: '100%', height: '100%' }}
+      />
     </div>
   );
-});
+};
 
 export default MapContainer;

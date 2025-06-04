@@ -1,335 +1,213 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import L from "leaflet";
-import { wmsService } from "../services/WMSService";
-import { geocodingService } from "../services/GeocodingService";
-import { poiService } from "../services/POIService";
-import * as tf from "@tensorflow/tfjs";
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { wmsService } from '../services/WMSService';
+import { geocodingService } from '../services/GeocodingService';
+import { poiService } from '../services/POIService';
 
 // Voice Recognition Engine for advanced voice processing
 class VoiceRecognitionEngine {
-  constructor() {
+  constructor(options = {}) {
+    const {
+      language = 'en-US',
+      continuous = true,
+      interimResults = true,
+      onResult = () => {},
+      onStart = () => {},
+      onEnd = () => {},
+      onError = () => {}
+    } = options;
+
     this.recognition = null;
+    this.language = language;
+    this.continuous = continuous;
+    this.interimResults = interimResults;
+    this.onResult = onResult;
+    this.onStart = onStart;
+    this.onEnd = onEnd;
+    this.onError = onError;
     this.isListening = false;
-    this.commandPatterns = new Map();
-    this.modelMode = "browser";
-    this.tfModel = null;
-
-    this.initializeCommandPatterns();
-    this.initializeWebSpeechAPI();
+    this.resultBuffer = [];
+    this.commandTimeout = null;
+    
+    this.initialize();
   }
 
-  initializeCommandPatterns() {
-    // Navigation commands
-    this.commandPatterns.set("navigation", [
-      {
-        pattern: /(?:go to|navigate to|show me|find|locate|take me to)\s+(.+)/i,
-        action: "navigate",
-        param: 1,
-      },
-      { pattern: /(?:zoom in|zoom closer)/i, action: "zoomIn" },
-      { pattern: /(?:zoom out|zoom back)/i, action: "zoomOut" },
-      {
-        pattern: /(?:zoom to level|set zoom)\s+(\d+)/i,
-        action: "zoomToLevel",
-        param: 1,
-      },
-      {
-        pattern: /(?:center on|focus on)\s+(.+)/i,
-        action: "navigate",
-        param: 1,
-      },
-    ]);
+  initialize() {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      console.error('Speech recognition not supported in this browser');
+      return false;
+    }
 
-    // Layer commands
-    this.commandPatterns.set("layers", [
-      {
-        pattern:
-          /(?:show|switch to|change to|enable)\s+(satellite|street|terrain|hybrid|dark|light)\s*(?:view|layer|map|mode)?/i,
-        action: "changeLayer",
-        param: 1,
-      },
-      {
-        pattern: /(?:show|enable|turn on)\s+(.+?)\s*(?:layer|overlay)/i,
-        action: "enableWMSLayer",
-        param: 1,
-      },
-      {
-        pattern: /(?:hide|disable|turn off)\s+(.+?)\s*(?:layer|overlay)/i,
-        action: "disableWMSLayer",
-        param: 1,
-      },
-      {
-        pattern: /(?:nasa|satellite imagery|modis)/i,
-        action: "enableWMSLayer",
-        param: "nasa_modis_terra",
-      },
-      {
-        pattern: /(?:weather|precipitation|rain)/i,
-        action: "enableWMSLayer",
-        param: "openweather_precipitation",
-      },
-      {
-        pattern: /(?:clouds|cloud cover)/i,
-        action: "enableWMSLayer",
-        param: "openweather_clouds",
-      },
-      {
-        pattern: /(?:terrain|elevation|topographic)/i,
-        action: "enableWMSLayer",
-        param: "stamen_terrain",
-      },
-    ]);
-
-    // Location commands
-    this.commandPatterns.set("location", [
-      {
-        pattern: /(?:where am i|show my location|current location)/i,
-        action: "showCurrentLocation",
-      },
-      {
-        pattern:
-          /(?:find|search for|show me|locate)\s+(.+?)\s*(?:near me|nearby)/i,
-        action: "findNearby",
-        param: 1,
-      },
-      {
-        pattern: /(?:restaurants?|food|dining|eat)\s*(?:near me|nearby)?/i,
-        action: "findNearby",
-        param: "restaurants",
-      },
-      {
-        pattern: /(?:hospitals?|medical|health)\s*(?:near me|nearby)?/i,
-        action: "findNearby",
-        param: "hospitals",
-      },
-      {
-        pattern: /(?:banks?|atm|money)\s*(?:near me|nearby)?/i,
-        action: "findNearby",
-        param: "banks",
-      },
-      {
-        pattern: /(?:gas stations?|fuel|petrol)\s*(?:near me|nearby)?/i,
-        action: "findNearby",
-        param: "gas",
-      },
-      {
-        pattern: /(?:add marker|place marker|mark this location)/i,
-        action: "addMarker",
-      },
-    ]);
-
-    // General commands
-    this.commandPatterns.set("general", [
-      {
-        pattern: /(?:help|what can you do|commands|instructions)/i,
-        action: "help",
-      },
-      { pattern: /(?:clear|reset|clean|remove all)/i, action: "clear" },
-      { pattern: /(?:stop listening|stop|pause)/i, action: "stopListening" },
-      {
-        pattern: /(?:what is this|describe location|tell me about)/i,
-        action: "describeLocation",
-      },
-    ]);
-  }
-
-  async initializeTensorFlowModel() {
     try {
-      console.log("Initializing TensorFlow.js voice model...");
+      // Use the appropriate speech recognition API
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      this.recognition = new SpeechRecognition();
       
-      // 1. First try to use the Web Speech API as the primary approach
-      if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
-        console.log("Browser speech recognition API is available - using as primary method");
-        this.modelMode = "browser";
-        return true;
-      }
+      // Configure recognition
+      this.recognition.lang = this.language;
+      this.recognition.continuous = this.continuous;
+      this.recognition.interimResults = this.interimResults;
       
-      // 2. Only if the Web Speech API is not available, try TensorFlow.js
-      try {
-        // Set up TensorFlow backend
-        await tf.ready();
-        const backendName = tf.getBackend();
-        console.log(`Using TensorFlow.js backend: ${backendName}`);
-        
-        // Try a simpler, more reliable model
-        const simpleModelUrl = 'https://storage.googleapis.com/tfjs-models/tfjs/sentiment_cnn_v1/model.json';
-        
-        try {
-          this.tfModel = await tf.loadLayersModel(simpleModelUrl);
-          console.log("✅ TensorFlow.js model loaded successfully");
-          this.modelMode = "tensorflow";
-          return true;
-        } catch (modelError) {
-          console.warn(`Failed to load TensorFlow model: ${modelError.message}`);
-        }
-      } catch (tfError) {
-        console.warn(`TensorFlow.js initialization failed: ${tfError.message}`);
-      }
+      // Set up event listeners
+      this.recognition.onstart = this.handleStart.bind(this);
+      this.recognition.onresult = this.handleResult.bind(this);
+      this.recognition.onerror = this.handleError.bind(this);
+      this.recognition.onend = this.handleEnd.bind(this);
       
-      // 3. If all TF.js attempts fail, gracefully fall back to browser API
-      console.log("Falling back to browser speech recognition API");
-      this.modelMode = "browser";
       return true;
     } catch (error) {
-      console.warn("Voice recognition initialization error:", error);
-      this.modelMode = "browser";
+      console.error('Error initializing speech recognition:', error);
       return false;
     }
   }
 
-  initializeWebSpeechAPI() {
-    // Initialize Web Speech API with fallback
-    const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-
-    if (SpeechRecognition) {
-      this.recognition = new SpeechRecognition();
-      this.recognition.continuous = false;
-      this.recognition.interimResults = true;
-      this.recognition.maxAlternatives = 1;
-      this.recognition.lang = "en-US";
-    } else {
-      console.error("Speech recognition not supported in this browser.");
-    }
-  }
-
-  parseCommand(transcript) {
-    const cleanTranscript = transcript.toLowerCase().trim();
-
-    // Try to match against command patterns
-    for (const [category, patterns] of this.commandPatterns) {
-      for (const { pattern, action, param } of patterns) {
-        const match = cleanTranscript.match(pattern);
-        if (match) {
-          const result = { action, category, confidence: 1.0 };
-          if (param) {
-            if (typeof param === "string") {
-              result.parameter = param;
-            } else if (match[param]) {
-              result.parameter = match[param].trim();
-            }
-          }
-          return result;
-        }
+  start() {
+    if (!this.recognition) {
+      if (!this.initialize()) {
+        this.onError(new Error('Could not initialize speech recognition'));
+        return false;
       }
     }
 
-    // Smart fallbacks for commands that don't match exactly
-    if (
-      cleanTranscript.includes("near") ||
-      cleanTranscript.includes("find") ||
-      cleanTranscript.includes("search")
-    ) {
+    try {
+      this.recognition.start();
+      return true;
+    } catch (error) {
+      console.error('Error starting speech recognition:', error);
+      this.onError(error);
+      return false;
+    }
+  }
+
+  stop() {
+    if (!this.recognition) return false;
+
+    try {
+      this.recognition.stop();
+      return true;
+    } catch (error) {
+      console.error('Error stopping speech recognition:', error);
+      return false;
+    }
+  }
+
+  handleStart(event) {
+    this.isListening = true;
+    this.resultBuffer = [];
+    this.onStart(event);
+  }
+
+  handleResult(event) {
+    const results = event.results;
+    const currentResult = results[results.length - 1];
+    const transcript = currentResult[0].transcript.trim();
+    
+    // For interim results, just call the callback
+    if (!currentResult.isFinal) {
+      this.onResult(transcript, false);
+      return;
+    }
+
+    // For final results, add to buffer and process
+    this.resultBuffer.push(transcript);
+    this.onResult(transcript, true);
+
+    // Process after a short delay to capture complete sentences
+    clearTimeout(this.commandTimeout);
+    this.commandTimeout = setTimeout(() => {
+      const fullCommand = this.resultBuffer.join(' ').trim();
+      if (fullCommand) {
+        this.processCommand(fullCommand);
+      }
+      this.resultBuffer = [];
+    }, 1000);
+  }
+
+  handleError(event) {
+    this.isListening = false;
+    this.onError(event);
+  }
+
+  handleEnd(event) {
+    this.isListening = false;
+    this.onEnd(event);
+    
+    // Auto restart if configured for continuous mode
+    if (this.continuous) {
+      setTimeout(() => {
+        if (this.recognition) {
+          try {
+            this.recognition.start();
+          } catch (error) {
+            console.error('Error restarting speech recognition:', error);
+          }
+        }
+      }, 1000);
+    }
+  }
+
+  processCommand(command) {
+    // Match patterns for different command types
+    const searchPattern = /^(search|find|show me|look for|locate|where is|what is near|nearby)\s+(.+)$/i;
+    const navigatePattern = /^(navigate|take me|go|directions|route|how do I get)\s+(?:to|towards|toward)\s+(.+)$/i;
+    const layerPattern = /^(show|hide|toggle)\s+(traffic|satellite|terrain|transit|bike|weather|precipitation|temperature|wind|cloud|roads|buildings|borders)\s+(layer|map)?$/i;
+    const zoomPattern = /^(?:zoom\s+(in|out)|set zoom(?:\s+level)?\s+(?:to\s+)?(\d+))$/i;
+    const resetPattern = /^(reset|clear)\s+(map|view|everything)$/i;
+    const helpPattern = /^(help|commands|what can I say|what can I do)$/i;
+
+    // Check each pattern
+    let match;
+    if (match = command.match(searchPattern)) {
       return {
-        action: "findNearby",
-        category: "location",
-        parameter: cleanTranscript,
-        confidence: 0.6,
+        type: 'search',
+        query: match[2],
+        rawCommand: command
+      };
+    } else if (match = command.match(navigatePattern)) {
+      return {
+        type: 'navigate',
+        destination: match[2],
+        rawCommand: command
+      };
+    } else if (match = command.match(layerPattern)) {
+      return {
+        type: 'layer',
+        action: match[1].toLowerCase(),
+        layer: match[2].toLowerCase(),
+        rawCommand: command
+      };
+    } else if (match = command.match(zoomPattern)) {
+      return {
+        type: 'zoom',
+        action: match[1] ? match[1].toLowerCase() : null,
+        level: match[2] ? parseInt(match[2], 10) : null,
+        rawCommand: command
+      };
+    } else if (match = command.match(resetPattern)) {
+      return {
+        type: 'reset',
+        rawCommand: command
+      };
+    } else if (match = command.match(helpPattern)) {
+      return {
+        type: 'help',
+        rawCommand: command
       };
     }
 
-    // Default to navigation as fallback
+    // If no pattern matches, try a more general approach
+    if (command.includes('search') || command.includes('find')) {
+      return {
+        type: 'search',
+        query: command.replace(/(search|find)\s+/i, ''),
+        rawCommand: command
+      };
+    }
+
+    // Return unknown command type as fallback
     return {
-      action: "navigate",
-      category: "navigation",
-      parameter: cleanTranscript,
-      confidence: 0.5,
+      type: 'unknown',
+      rawCommand: command
     };
-  }
-
-  // Enhanced voice feedback system
-  speak(text, priority = "normal") {
-    if ("speechSynthesis" in window) {
-      // Cancel any ongoing speech if high priority
-      if (priority === "high") {
-        speechSynthesis.cancel();
-      }
-
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.1;
-      utterance.pitch = 1.0;
-      utterance.volume = 0.8;
-
-      // Only get voices if we need to - performance optimization
-      const voices = speechSynthesis.getVoices();
-      const preferredVoice = voices.find(
-        (voice) =>
-          voice.lang.startsWith("en") &&
-          (voice.name.includes("Google") || voice.name.includes("Microsoft"))
-      );
-
-      if (preferredVoice) {
-        utterance.voice = preferredVoice;
-      }
-
-      speechSynthesis.speak(utterance);
-    }
-  }
-
-  startListening(onResult, onStatus) {
-    if (!this.recognition) {
-      console.error("Speech recognition not initialized");
-      return;
-    }
-
-    if (this.isListening) {
-      return;
-    }
-
-    this.isListening = true;
-
-    this.recognition.onstart = () => {
-      onStatus("listening");
-    };
-
-    this.recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      const confidence = event.results[0][0].confidence;
-
-      console.log("Voice transcript:", transcript, "Confidence:", confidence);
-
-      onStatus("processing");
-
-      // Process the command
-      const command = this.parseCommand(transcript);
-
-      onResult(command, transcript);
-
-      onStatus("success");
-      this.isListening = false;
-    };
-
-    this.recognition.onerror = (event) => {
-      console.error("Speech recognition error:", event.error);
-      onStatus("error");
-      this.isListening = false;
-    };
-
-    this.recognition.onend = () => {
-      this.isListening = false;
-      // Don't set status to idle here as it might override success/error states
-    };
-
-    // Start listening
-    this.recognition.start();
-  }
-
-  stopListening(onStatus) {
-    if (this.recognition && this.isListening) {
-      this.recognition.stop();
-      this.isListening = false;
-      onStatus("idle");
-    }
-  }
-
-  async switchModel(mode) {
-    if (mode === "tensorflow" && !this.tfModel) {
-      return await this.initializeTensorFlowModel();
-    } else if (mode === "browser") {
-      this.modelMode = "browser";
-      return true;
-    }
-    return false;
   }
 }
 
@@ -341,426 +219,192 @@ const VoiceNavigator = ({
   activeLayers,
   onLayerChange,
 }) => {
+  const [isMicAvailable, setIsMicAvailable] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [modelMode, setModelMode] = useState("browser");
-  const [isModelLoading, setIsModelLoading] = useState(false);
-  const voiceEngineRef = useRef(null);
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const [finalTranscript, setFinalTranscript] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+  const engineRef = useRef(null);
 
-  // Initialize voice recognition engine once
+  // Initialize voice recognition engine
   useEffect(() => {
-    voiceEngineRef.current = new VoiceRecognitionEngine();
-
-    const initTensorFlow = async () => {
-      setIsModelLoading(true);
-      const success = await voiceEngineRef.current.initializeTensorFlowModel();
-
-      if (success) {
-        setModelMode("tensorflow");
+    // Check for microphone permissions
+    const checkMicrophonePermission = async () => {
+      try {
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        setIsMicAvailable(true);
+      } catch (error) {
+        console.error('Microphone permission denied:', error);
+        setErrorMessage('Microphone access denied. Please enable microphone access.');
+        setIsMicAvailable(false);
       }
-      setIsModelLoading(false);
     };
 
-    initTensorFlow();
+    checkMicrophonePermission();
+
+    // Create the engine instance
+    engineRef.current = new VoiceRecognitionEngine({
+      language: 'en-US',
+      continuous: true,
+      interimResults: true,
+      onResult: handleRecognitionResult,
+      onStart: handleRecognitionStart,
+      onEnd: handleRecognitionEnd,
+      onError: handleRecognitionError
+    });
+
+    // Cleanup on component unmount
+    return () => {
+      if (engineRef.current) {
+        engineRef.current.stop();
+      }
+    };
   }, []);
 
-  // Memoize handlers to prevent unnecessary re-renders
-  const handleVoiceResult = useCallback(
-    async (command, transcript) => {
-      console.log("Voice command processed:", command, transcript);
-
-      try {
-        await executeMapCommand(command, transcript);
-        onVoiceCommand(command, transcript);
-      } catch (error) {
-        console.error("Error executing command:", error);
-        voiceEngineRef.current.speak(
-          "Sorry, I could not execute that command",
-          "high"
-        );
-      }
-    },
-    [onVoiceCommand, mapInstance, currentLocation]
-  );
-
-  const executeMapCommand = async (command, transcript) => {
-    if (!mapInstance) {
-      console.warn("Map instance not available");
-      return;
-    }
-
-    const engine = voiceEngineRef.current;
-
-    try {
-      switch (command.action) {
-        case "navigate":
-          await handleNavigation(command.parameter, engine);
-          break;
-
-        case "zoomIn":
-          mapInstance.zoomIn(1);
-          engine.speak("Zooming in");
-          break;
-
-        case "zoomOut":
-          mapInstance.zoomOut(1);
-          engine.speak("Zooming out");
-          break;
-
-        case "zoomToLevel":
-          const level = parseInt(command.parameter, 10);
-          if (!isNaN(level) && level >= 0 && level <= 19) {
-            mapInstance.setZoom(level);
-            engine.speak(`Setting zoom level to ${level}`);
-          } else {
-            engine.speak("Invalid zoom level");
-          }
-          break;
-
-        case "changeLayer":
-          handleLayerChange(command.parameter, engine);
-          break;
-
-        case "enableWMSLayer":
-          await handleWMSLayer(command.parameter, true, engine);
-          break;
-
-        case "disableWMSLayer":
-          await handleWMSLayer(command.parameter, false, engine);
-          break;
-
-        case "showCurrentLocation":
-          if (currentLocation) {
-            mapInstance.setView([currentLocation.lat, currentLocation.lng], 15);
-            engine.speak("Showing your current location");
-          } else {
-            engine.speak(
-              "Your location is not available. Please enable location services."
-            );
-          }
-          break;
-
-        case "findNearby":
-          await handleNearbySearch(command.parameter, engine);
-          break;
-
-        case "addMarker":
-          if (currentLocation) {
-            const marker = L.marker([
-              currentLocation.lat,
-              currentLocation.lng,
-            ]).addTo(mapInstance);
-            marker.bindPopup("Marker placed at your location").openPopup();
-            engine.speak("Marker added at your current location");
-          } else {
-            engine.speak("Cannot add marker. Your location is not available.");
-          }
-          break;
-
-        case "help":
-          document.querySelector(".help-button")?.click();
-          engine.speak("Showing voice command help guide");
-          break;
-
-        case "clear":
-          // Remove all markers and overlays
-          mapInstance.eachLayer((layer) => {
-            if (layer instanceof L.Marker || layer instanceof L.Circle) {
-              mapInstance.removeLayer(layer);
-            }
-          });
-          engine.speak("Clearing all markers from the map");
-          break;
-
-        case "describeLocation":
-          await handleLocationDescription(engine);
-          break;
-
-        case "stopListening":
-          engine.stopListening(onStatusChange);
-          engine.speak("Voice recognition paused");
-          break;
-
-        default:
-          engine.speak(
-            `I heard: ${transcript}. Please try a different command.`
-          );
-          break;
-      }
-    } catch (error) {
-      console.error("Error executing map command:", error);
-      engine.speak("Sorry, I could not complete that action");
-    }
-  };
-
-  const handleNavigation = async (location, engine) => {
-    try {
-      engine.speak(`Searching for ${location}`);
-      const results = await geocodingService.smartSearch(location);
-
-      if (results.length > 0) {
-        const result = results[0];
-        mapInstance.setView([result.lat, result.lng], 12);
-
-        // Add marker for the location
-        const marker = L.marker([result.lat, result.lng]).addTo(mapInstance);
-        marker.bindPopup(`📍 ${result.displayName}`).openPopup();
-
-        engine.speak(`Found ${result.displayName}`);
-      } else {
-        engine.speak(`Sorry, I could not find ${location}`);
-      }
-    } catch (error) {
-      console.error("Navigation error:", error);
-      engine.speak("Sorry, there was an error finding that location");
-    }
-  };
-
-  const handleLayerChange = (layerType, engine) => {
-    // Map layer type from voice to actual layer ID
-    const layerMapping = {
-      satellite: "satellite",
-      street: "street",
-      terrain: "terrain",
-      hybrid: "hybrid",
-      dark: "dark",
-      light: "cartodb_positron",
-    };
-
-    const normalizedType = layerType.toLowerCase();
-    const actualLayerId = layerMapping[normalizedType] || normalizedType;
-
-    // Update base layer via map controller
-    if (mapInstance && mapInstance.setBaseLayer) {
-      mapInstance.setBaseLayer(actualLayerId);
-      engine.speak(`Switched to ${normalizedType} view`);
+  // Handle recognition result
+  const handleRecognitionResult = useCallback((transcript, isFinal) => {
+    if (isFinal) {
+      setFinalTranscript(transcript);
+      setInterimTranscript('');
     } else {
-      // Fallback to use a custom event
-      const event = new CustomEvent("changeMapLayer", {
-        detail: { layer: actualLayerId },
-      });
-      document.dispatchEvent(event);
-      engine.speak(`Switching to ${normalizedType} view`);
+      setInterimTranscript(transcript);
     }
-  };
+  }, []);
 
-  const handleWMSLayer = async (layerParam, enable, engine) => {
-    // Try to detect which layer the user is referring to
-    let layerId = layerParam;
-    const wmsLayerFromVoice = wmsService.detectLayerFromCommand(layerParam);
-    
-    if (wmsLayerFromVoice) {
-      layerId = wmsLayerFromVoice;
+  // Handle recognition start
+  const handleRecognitionStart = useCallback(() => {
+    setIsListening(true);
+    setErrorMessage('');
+    if (onStatusChange) {
+      onStatusChange('listening');
     }
-    
-    // Get the layer info for better voice feedback
-    const layerInfo = wmsService.getLayerInfo(layerId);
-    
-    // If layer exists and handler is available, update the layer
-    if (layerInfo && onLayerChange) {
-      onLayerChange(layerId, enable);
-      
-      if (enable) {
-        engine.speak(`Showing ${layerInfo.name || layerId} layer`);
-      } else {
-        engine.speak(`Hiding ${layerInfo.name || layerId} layer`);
+  }, [onStatusChange]);
+
+  // Handle recognition end
+  const handleRecognitionEnd = useCallback(() => {
+    setIsListening(false);
+    setInterimTranscript('');
+    if (onStatusChange) {
+      onStatusChange('idle');
+    }
+  }, [onStatusChange]);
+
+  // Handle recognition error
+  const handleRecognitionError = useCallback((event) => {
+    setIsListening(false);
+    if (onStatusChange) {
+      onStatusChange('error');
+    }
+
+    // Handle different error types
+    switch (event.error) {
+      case 'no-speech':
+        setErrorMessage('No speech was detected. Please try again.');
+        break;
+      case 'aborted':
+        setErrorMessage('Speech recognition was aborted.');
+        break;
+      case 'audio-capture':
+        setErrorMessage('No microphone was found or microphone is disabled.');
+        break;
+      case 'network':
+        setErrorMessage('Network error occurred. Please check your connection.');
+        break;
+      case 'not-allowed':
+        setErrorMessage('Microphone permission denied. Please enable microphone access.');
+        break;
+      default:
+        setErrorMessage(`Error: ${event.error || 'Unknown error'}`);
+    }
+
+    // Reset status after showing error
+    setTimeout(() => {
+      if (onStatusChange) {
+        onStatusChange('idle');
       }
-      return;
-    }
-    
-    engine.speak(`I couldn't find a layer called ${layerParam}`);
-  };
+    }, 3000);
+  }, [onStatusChange]);
 
-  const handleNearbySearch = async (query, engine) => {
-    if (!mapInstance) {
-      engine.speak("Map is not available right now.");
-      return;
-    }
-
-    if (!currentLocation) {
-      engine.speak(
-        "Your location is not available. Please enable location services."
-      );
-      return;
-    }
-
-    try {
-      engine.speak(`Searching for ${query} nearby`);
-
-      // Detect category from query
-      let category = query;
-      if (typeof query === "string" && query.length > 10) {
-        // This is likely a full sentence, try to extract the category
-        category = poiService.detectCategory(query) || query;
-      }
-
-      // Search for POIs
-      const pois = await poiService.findNearby(
-        currentLocation.lat,
-        currentLocation.lng,
-        category,
-        2 // 2km radius
-      );
-
-      if (pois.length > 0) {
-        // Add markers for found POIs
-        pois.forEach((poi) => {
-          const marker = L.marker([poi.lat, poi.lng]).addTo(mapInstance);
-          
-          let popupContent = `<b>${poi.name}</b>`;
-          if (poi.address) popupContent += `<br/>${poi.address}`;
-          if (poi.distance) popupContent += `<br/>Distance: ${poi.distance.toFixed(2)} km`;
-          if (poi.phone) popupContent += `<br/>📞 ${poi.phone}`;
-          
-          marker.bindPopup(popupContent);
-        });
-        
-        // Fit map to show all markers
-        const bounds = L.latLngBounds(pois.map(poi => [poi.lat, poi.lng]));
-        mapInstance.fitBounds(bounds, { padding: [50, 50] });
-        
-        engine.speak(`Found ${pois.length} ${category} nearby`);
-      } else {
-        engine.speak(`Sorry, I couldn't find any ${category} near you`);
-      }
-    } catch (error) {
-      console.error("Error searching nearby:", error);
-      engine.speak("Sorry, there was an error searching for places nearby");
-    }
-  };
-
-  const handleLocationDescription = async (engine) => {
-    if (!currentLocation) {
-      engine.speak("Your location information is not available");
+  // Start voice recognition
+  const startListening = useCallback(() => {
+    if (!isMicAvailable) {
+      setErrorMessage('Microphone not available. Please check permissions.');
       return;
     }
 
-    try {
-      const result = await geocodingService.reverseGeocode(
-        currentLocation.lat,
-        currentLocation.lng
-      );
-
-      if (result && result.displayName) {
-        engine.speak(`You are at ${result.displayName}`);
-      } else {
-        engine.speak("I cannot determine your exact location");
-      }
-    } catch (error) {
-      console.error("Error describing location:", error);
-      engine.speak("I cannot describe your location at this moment");
+    if (engineRef.current) {
+      engineRef.current.start();
     }
-  };
+  }, [isMicAvailable]);
 
+  // Stop voice recognition
+  const stopListening = useCallback(() => {
+    if (engineRef.current) {
+      engineRef.current.stop();
+    }
+  }, []);
+
+  // Toggle listening state
   const toggleListening = useCallback(() => {
     if (isListening) {
-      voiceEngineRef.current.stopListening(onStatusChange);
-      setIsListening(false);
+      stopListening();
     } else {
-      voiceEngineRef.current.startListening(handleVoiceResult, onStatusChange);
-      setIsListening(true);
+      startListening();
     }
-  }, [isListening, handleVoiceResult, onStatusChange]);
+  }, [isListening, startListening, stopListening]);
 
-  const switchVoiceModel = useCallback(
-    async (mode) => {
-      if (isModelLoading) return;
-
-      setIsModelLoading(true);
-      const success = await voiceEngineRef.current.switchModel(mode);
-
-      if (success) {
-        setModelMode(mode);
-        voiceEngineRef.current.speak(`Switched to ${mode} voice recognition`);
-      } else {
-        voiceEngineRef.current.speak(
-          `Failed to switch to ${mode} voice recognition`
-        );
+  // Process command when final transcript is updated
+  useEffect(() => {
+    if (finalTranscript && engineRef.current && onVoiceCommand) {
+      const commandObj = engineRef.current.processCommand(finalTranscript);
+      if (commandObj && commandObj.type !== 'unknown') {
+        onVoiceCommand(commandObj);
       }
+      setFinalTranscript('');
+    }
+  }, [finalTranscript, onVoiceCommand]);
 
-      setIsModelLoading(false);
-    },
-    [isModelLoading]
-  );
+  // Automatic restart if recognition stops unexpectedly
+  useEffect(() => {
+    const restartTimeout = setTimeout(() => {
+      // If the engine exists but isn't listening, try to restart
+      if (engineRef.current && !isListening && !errorMessage) {
+        engineRef.current.start();
+      }
+    }, 5000);
 
-  // Memoize the layers to prevent unnecessary re-renders
-  const availableLayers = useMemo(() => wmsService.getAllLayers().slice(0, 4), []);
+    return () => clearTimeout(restartTimeout);
+  }, [isListening, errorMessage]);
 
   return (
-    <div className="voice-control-panel">
-      {/* Voice Control Title */}
-      <h2 className="voice-control-title">
-        <span>🎤</span> Voice Navigation
-      </h2>
+    <div className="voice-navigator">
+      <div className="voice-control-panel">
+        <button
+          className={`mic-button ${isListening ? 'active' : ''} ${!isMicAvailable ? 'disabled' : ''}`}
+          onClick={toggleListening}
+          disabled={!isMicAvailable}
+        >
+          <span className="mic-icon">{isListening ? '🎤' : '🎙️'}</span>
+          <span className="mic-text">
+            {isListening ? 'Listening...' : 'Start Voice Control'}
+          </span>
+        </button>
 
-      {/* Main Voice Button */}
-      <button
-        className={`voice-button ${isListening ? "listening" : ""}`}
-        onClick={toggleListening}
-        disabled={isModelLoading}
-        aria-label={isListening ? "Stop listening" : "Start voice command"}
-      >
-        <div className="button-icon">{isListening ? "🔴" : "🎙️"}</div>
-        {isListening
-          ? "Listening... Tap to Stop"
-          : isModelLoading
-          ? "Loading AI Model..."
-          : "Tap to Speak"}
-      </button>
-
-      {/* Model Selector */}
-      <div className="voice-model-selector">
-        <div className="model-selector-title">Recognition Engine:</div>
-        <div className="model-options">
-          <div
-            className={`model-option ${modelMode === "browser" ? "active" : ""}`}
-            onClick={() => switchVoiceModel("browser")}
-          >
-            Browser API
+        {errorMessage && (
+          <div className="voice-error-message">
+            <span className="error-icon">⚠️</span>
+            <span className="error-text">{errorMessage}</span>
           </div>
-          <div
-            className={`model-option ${modelMode === "tensorflow" ? "active" : ""}`}
-            onClick={() => switchVoiceModel("tensorflow")}
-          >
-            TensorFlow
+        )}
+
+        {interimTranscript && (
+          <div className="transcript-container">
+            <div className="interim-transcript">{interimTranscript}</div>
           </div>
-        </div>
-      </div>
+        )}
 
-      {/* Data Layers Section */}
-      <div className="data-layers-section">
-        <h3 className="data-layers-title">
-          <span>🛰️</span> Data Layers
-        </h3>
-        <div className="data-layer-list">
-          {availableLayers.map((layer) => (
-            <div
-              key={layer.id}
-              className={`data-layer-item ${
-                activeLayers.has(layer.id) ? "active" : ""
-              }`}
-              onClick={() =>
-                handleWMSLayer(
-                  layer.id,
-                  !activeLayers.has(layer.id),
-                  voiceEngineRef.current
-                )
-              }
-            >
-              <span className="data-layer-icon">{layer.icon}</span>
-              <span>{layer.name}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Sample Commands */}
-      <div className="sample-commands">
-        <div className="sample-commands-title">Try saying:</div>
-        <div className="sample-command-list">
-          <div className="sample-command-item">"Navigate to Central Park"</div>
-          <div className="sample-command-item">"Find restaurants near me"</div>
-          <div className="sample-command-item">"Show satellite view"</div>
-          <div className="sample-command-item">"Where am I right now?"</div>
+        <div className="voice-instructions">
+          <p>Say "help" for available commands</p>
         </div>
       </div>
     </div>

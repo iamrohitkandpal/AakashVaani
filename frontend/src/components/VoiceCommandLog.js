@@ -1,109 +1,97 @@
 import React from 'react';
 
+/**
+ * Component to display a list of voice commands and their results
+ * @param {Array} commands - List of command objects with type, text, and timestamp
+ */
 const VoiceCommandLog = ({ commands }) => {
+  // Format timestamp into human-readable time
   const formatTimestamp = (timestamp) => {
-    return new Date(timestamp).toLocaleTimeString('en-US', {
-      hour12: true,
-      hour: 'numeric',
-      minute: '2-digit',
-      second: '2-digit'
-    });
+    if (!timestamp) return '';
+    
+    try {
+      const date = new Date(timestamp);
+      return date.toLocaleTimeString([], { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        second: '2-digit'
+      });
+    } catch (e) {
+      console.error('Error formatting timestamp:', e);
+      return '';
+    }
   };
 
+  // Get appropriate icon for command type
   const getCommandIcon = (command) => {
-    if (!command || !command.action) return '🗣️';
-    
-    switch (command.action) {
-      case 'navigate': return '🧭';
-      case 'zoomIn': return '🔍';
-      case 'zoomOut': return '🔎';
-      case 'changeLayer': return '🗺️';
-      case 'showCurrentLocation': return '📍';
-      case 'findNearby': return '📍';
-      case 'addMarker': return '📌';
-      case 'help': return '❓';
-      case 'clear': return '🗑️';
-      default: return '🗣️';
-    }
-  };
-
-  const getActionDescription = (command) => {
-    if (!command || !command.action) return 'Voice command processed';
-    
-    switch (command.action) {
+    switch (command.type) {
+      case 'search':
+        return '🔍';
       case 'navigate':
-        return `Navigate to ${command.parameter || 'location'}`;
-      case 'zoomIn':
-        return 'Zoom in on map';
-      case 'zoomOut':
-        return 'Zoom out on map';
-      case 'zoomToLevel':
-        return `Zoom to level ${command.parameter}`;
-      case 'changeLayer':
-        return `Switch to ${command.parameter} view`;
-      case 'showCurrentLocation':
-        return 'Show current location';
-      case 'findNearby':
-        return `Find ${command.parameter} nearby`;
-      case 'addMarker':
-        return 'Add marker at current location';
+        return '🧭';
+      case 'layer':
+        return '📊';
+      case 'zoom':
+        return '🔎';
+      case 'reset':
+        return '🔄';
       case 'help':
-        return 'Show voice commands help';
-      case 'clear':
-        return 'Clear map';
-      case 'stopListening':
-        return 'Stop voice recognition';
+        return '❓';
+      case 'error':
+        return '⚠️';
       default:
-        return `Execute ${command.action}`;
+        return '💬';
     }
   };
+  
+  // Generate status text based on command
+  const getStatusText = (command) => {
+    if (command.error) {
+      return <span className="command-status error">Failed</span>;
+    }
+    
+    if (command.processing) {
+      return <span className="command-status processing">Processing...</span>;
+    }
+    
+    return <span className="command-status success">Completed</span>;
+  };
+  
+  // If no commands, show empty state
+  if (!commands || commands.length === 0) {
+    return (
+      <div className="voice-command-empty">
+        <p>No commands yet. Try saying "Find restaurants near me"</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="command-log">
-      <h3 className="command-log-title">
-        📝 Command History
-      </h3>
-      
-      {commands.length === 0 ? (
-        <div style={{ 
-          textAlign: 'center', 
-          color: '#666', 
-          padding: '2rem',
-          fontStyle: 'italic' 
-        }}>
-          No voice commands yet. Start speaking to see your command history here.
-        </div>
-      ) : (
-        <div className="command-list">
-          {commands.map((command) => (
-            <div key={command.id} className="command-item">
-              <div className="command-header" style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '0.5rem',
-                marginBottom: '0.5rem' 
-              }}>
-                <span style={{ fontSize: '1.2rem' }}>
-                  {getCommandIcon(command.command)}
-                </span>
-                <span className="command-transcript">
-                  "{command.transcript}"
-                </span>
+    <div className="voice-command-log">
+      <ul className="command-list">
+        {commands.map((command, index) => (
+          <li key={`${command.timestamp || ''}-${index}`} className="command-item">
+            <div className="command-icon">{getCommandIcon(command)}</div>
+            
+            <div className="command-content">
+              <div className="command-text">
+                {command.rawCommand || 'Unknown command'}
               </div>
               
-              <div className="command-action">
-                {getActionDescription(command.command)}
-              </div>
-              
-              <div className="command-timestamp">
-                {formatTimestamp(command.timestamp)}
+              <div className="command-meta">
+                <span className="command-type">{command.type || 'unknown'}</span>
+                <span className="command-time">{formatTimestamp(command.timestamp)}</span>
               </div>
             </div>
-          ))}
-        </div>
-      )}
+            
+            <div className="command-status-container">
+              {getStatusText(command)}
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 };
 
-export default VoiceCommandLog;
+export default React.memo(VoiceCommandLog);

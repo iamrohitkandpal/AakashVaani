@@ -1,58 +1,81 @@
-import React from 'react';
+import React, { useState, useEffect } from "react";
 
+/**
+ * Component to visually indicate the current status of voice recognition
+ * @param {string} status - Current voice recognition status: 'idle', 'listening', 'processing', 'error'
+ */
 const VoiceStatusIndicator = ({ status }) => {
+  const [blinkClass, setBlinkClass] = useState("");
+
+  // Configure visual appearance based on status
   const getStatusConfig = () => {
     switch (status) {
-      case 'listening':
+      case "listening":
         return {
-          icon: '🎤',
-          text: 'Listening...',
-          description: 'Speak your command now'
+          color: "#4CAF50",
+          icon: "🎤",
+          label: "Listening",
+          pulse: true,
         };
-      case 'processing':
+      case "processing":
         return {
-          icon: '⚡',
-          text: 'Processing...',
-          description: 'Understanding your command'
+          color: "#2196F3",
+          icon: "⏳",
+          label: "Processing",
+          pulse: false,
         };
-      case 'success':
+      case "speaking":
         return {
-          icon: '✅',
-          text: 'Command Executed',
-          description: 'Action completed successfully'
+          color: "#9C27B0",
+          icon: "🔊",
+          label: "Speaking",
+          pulse: true,
         };
-      case 'error':
+      case "error":
         return {
-          icon: '❌',
-          text: 'Error',
-          description: 'Please try again'
+          color: "#F44336",
+          icon: "⚠️",
+          label: "Error",
+          pulse: false,
         };
+      case "idle":
       default:
         return {
-          icon: '🔇',
-          text: 'Voice Control Ready',
-          description: 'Click to start voice commands'
+          color: "#757575",
+          icon: "🎙️",
+          label: "Idle",
+          pulse: false,
         };
     }
   };
 
   const statusConfig = getStatusConfig();
 
+  // Manage pulsing effect
+  useEffect(() => {
+    if (statusConfig.pulse) {
+      setBlinkClass("pulse");
+    } else {
+      setBlinkClass("");
+    }
+
+    // Clean up animation when component unmounts or status changes
+    return () => {
+      setBlinkClass("");
+    };
+  }, [status, statusConfig.pulse]);
+
   return (
-    <div className={`voice-status-indicator ${status}`}>
-      <span className="status-icon">{statusConfig.icon}</span>
-      <div className="status-info">
-        <div className="status-text">{statusConfig.text}</div>
-        <div className="status-description" style={{ 
-          fontSize: '0.75rem', 
-          color: '#888', 
-          marginTop: '0.2rem' 
-        }}>
-          {statusConfig.description}
-        </div>
+    <div className="voice-status-indicator">
+      <div
+        className={`status-badge ${blinkClass}`}
+        style={{ backgroundColor: statusConfig.color }}
+      >
+        <span className="status-icon">{statusConfig.icon}</span>
+        <span className="status-label">{statusConfig.label}</span>
       </div>
     </div>
   );
 };
 
-export default VoiceStatusIndicator;
+export default React.memo(VoiceStatusIndicator);
