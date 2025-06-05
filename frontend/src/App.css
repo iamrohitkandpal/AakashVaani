@@ -589,6 +589,52 @@ body {
   white-space: nowrap;
 }
 
+/* Manual Command Form */
+.manual-command-form {
+  display: flex;
+  align-items: stretch; /* Align items to stretch vertically */
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+
+.manual-command-input {
+  flex-grow: 1;
+  padding: calc(var(--space-sm) + 1px) var(--space-md); /* Adjusted padding */
+  background-color: var(--dark); 
+  color: var(--lightest-gray);
+  border: 1px solid var(--mid-gray);
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  line-height: 1.5; /* Improved line height */
+}
+
+.manual-command-input:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.4); 
+}
+
+.manual-command-button {
+  background-color: var(--primary-color);
+  color: var(--white);
+  border: none;
+  border-radius: var(--radius-md);
+  padding: calc(var(--space-sm) + 1px) var(--space-md); /* Match input vertical padding */
+  font-size: 1rem; 
+  line-height: 1.5; /* Match input line-height */
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+  flex-shrink: 0;
+  display: flex; 
+  align-items: center; 
+  justify-content: center; 
+}
+
+.manual-command-button:hover {
+  background-color: var(--primary-dark);
+}
+
 /* Responsive Styles */
 @media (max-width: 768px) {
   .main-content {
