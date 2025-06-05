@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { wmsService } from '../services/WMSService';
@@ -11,16 +11,16 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-const DEFAULT_CENTER = [28.6139, 77.209]; // New Delhi coordinates
+const DEFAULT_CENTER = [28.6139, 77.209]; // Default to New Delhi or a global neutral like [51.505, -0.09]
 const DEFAULT_ZOOM = 13;
 
-// Custom marker icons
-const createCustomIcon = (iconUrl, size = [25, 41], anchor = [12, 41]) => {
+// Custom marker icons (assuming these are defined in your App.css or here)
+const createCustomIcon = (iconUrl, size = [25, 41], anchor = [12, 41], popupAnchor = [0, -41]) => {
   return L.icon({
     iconUrl,
     iconSize: size,
     iconAnchor: anchor,
-    popupAnchor: [0, -41]
+    popupAnchor: popupAnchor
   });
 };
 
@@ -33,11 +33,12 @@ const searchResultIcon = createCustomIcon(
 );
 
 const pulsingLocationIcon = L.divIcon({
-  className: 'pulsing-location-marker',
-  html: '<div class="pulsing-dot"></div>',
+  className: 'pulsing-location-marker', // Ensure this class is defined in App.css
+  html: '<div class="pulsing-dot"></div>', // Ensure .pulsing-dot is styled
   iconSize: [20, 20],
   iconAnchor: [10, 10]
 });
+
 
 const MapContainer = ({
   onMapReady,
@@ -54,80 +55,78 @@ const MapContainer = ({
   const mapInstanceRef = useRef(null);
   const markersLayerRef = useRef(null);
   const layerInstancesRef = useRef({});
-  const [initialized, setInitialized] = useState(false);
-  
-  // Initialize map
+  // Removed 'initialized' state, mapInstanceRef.current will serve this purpose
+
+  // Initialize map instance
   useEffect(() => {
-    if (mapRef.current && !initialized) {
-      const initialCenter = center || DEFAULT_CENTER;
-      const initialZoom = zoom || DEFAULT_ZOOM;
-      
-      // Create map instance
-      const mapInstance = L.map(mapRef.current).setView(initialCenter, initialZoom);
-      
-      // Add base layer (OpenStreetMap)
+    if (mapRef.current && !mapInstanceRef.current) {
+      const initialMapCenter = center || DEFAULT_CENTER;
+      const initialMapZoom = typeof zoom === 'number' ? zoom : DEFAULT_ZOOM;
+
+      const map = L.map(mapRef.current, {
+          // prefer passing options here rather than chaining setView immediately
+          center: initialMapCenter,
+          zoom: initialMapZoom,
+      });
+
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        maxZoom: 19
-      }).addTo(mapInstance);
-      
-      // Create a markers layer
-      const markersLayer = L.layerGroup().addTo(mapInstance);
-      
-      // Store references
-      mapInstanceRef.current = mapInstance;
-      markersLayerRef.current = markersLayer;
-      
-      // Call callback with map instance
+        maxZoom: 19,
+        minZoom: 3
+      }).addTo(map);
+
+      mapInstanceRef.current = map;
+      markersLayerRef.current = L.layerGroup().addTo(map);
+
       if (onMapReady) {
-        onMapReady(mapInstance);
+        onMapReady(map);
       }
-      
-      setInitialized(true);
-      
-      // Cleanup function
-      return () => {
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.remove();
-          mapInstanceRef.current = null;
-        }
-      };
     }
-  }, [onMapReady, initialized, center, zoom]);
-  
-  // Update map center and zoom when props change
+
+    // Cleanup function to destroy map instance when component unmounts
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+      if (markersLayerRef.current) {
+        markersLayerRef.current.remove();
+        markersLayerRef.current = null;
+      }
+      layerInstancesRef.current = {};
+    };
+  }, [onMapReady]); // Initialize only once. onMapReady is a prop.
+
+  // Update map view when center or zoom props change
   useEffect(() => {
-    if (mapInstanceRef.current && center && zoom) {
-      mapInstanceRef.current.setView([center.lat, center.lng], zoom, {
-        animate: true,
-        duration: 1
-      });
+    if (mapInstanceRef.current && center && typeof zoom === 'number') {
+      mapInstanceRef.current.setView(center, zoom);
     }
   }, [center, zoom]);
-  
+
   // Handle user location updates
   useEffect(() => {
     if (!mapInstanceRef.current || !markersLayerRef.current || !currentLocation) return;
-    
+
     const map = mapInstanceRef.current;
     const markersLayer = markersLayerRef.current;
-    
-    // Clear existing location markers
+
+    // Clear existing location markers (ones with locationMarker: true option)
     markersLayer.eachLayer(layer => {
       if (layer.options.locationMarker) {
         markersLayer.removeLayer(layer);
       }
     });
-    
+
     // Add location marker
     const marker = L.marker([currentLocation.lat, currentLocation.lng], {
       icon: voiceStatus === 'listening' ? pulsingLocationIcon : locationIcon,
-      locationMarker: true,
+      locationMarker: true, // Custom option to identify this marker
       zIndexOffset: 1000
     }).addTo(markersLayer);
-    
+
     marker.bindPopup('<b>Your Location</b>');
-    
+
     // Add accuracy circle if available
     if (currentLocation.accuracy) {
       const circle = L.circle([currentLocation.lat, currentLocation.lng], {
@@ -136,64 +135,46 @@ const MapContainer = ({
         fillColor: '#3388ff',
         fillOpacity: 0.1,
         weight: 1,
-        locationMarker: true
+        locationMarker: true // Custom option to identify this circle
       }).addTo(markersLayer);
     }
   }, [currentLocation, voiceStatus]);
-  
+
   // Update search results markers
   useEffect(() => {
     if (!mapInstanceRef.current || !markersLayerRef.current) return;
-    
+
     const markersLayer = markersLayerRef.current;
-    
-    // Clear existing search result markers
+
+    // Clear existing search result markers (ones without locationMarker: true)
     markersLayer.eachLayer(layer => {
-      if (layer.options.searchResultMarker) {
+      if (!layer.options.locationMarker) {
         markersLayer.removeLayer(layer);
       }
     });
-    
+
     // Add markers for search results
     if (searchResults && searchResults.length > 0) {
       searchResults.forEach((result, index) => {
-        if (typeof result.lat === 'number' && typeof result.lng === 'number') {
+        if (result.lat && result.lng) {
           const marker = L.marker([result.lat, result.lng], {
-            icon: searchResultIcon,
-            searchResultMarker: true,
-            zIndexOffset: 500
+            icon: searchResultIcon
           }).addTo(markersLayer);
-          
-          // Prepare popup content
-          let popupContent = `<div class="search-result-popup">`;
-          popupContent += `<h3>${result.name || 'Location'}</h3>`;
-          
-          if (result.address) {
-            const address = typeof result.address === 'string' 
-              ? result.address 
-              : Object.values(result.address).filter(Boolean).join(', ');
-            
-            popupContent += `<p>${address}</p>`;
-          }
-          
+
+          let popupContent = `<div class="search-result-popup"><h3>${result.name || 'Search Result'}</h3>`;
           if (result.type) {
             popupContent += `<p class="result-type">${result.type}</p>`;
           }
-          
           if (result.distance) {
             popupContent += `<p class="result-distance">${
-              result.distance < 1 
-                ? `${Math.round(result.distance * 1000)}m` 
+              result.distance < 1
+                ? `${Math.round(result.distance * 1000)}m`
                 : `${result.distance.toFixed(1)}km`
             } away</p>`;
           }
-          
           popupContent += `</div>`;
-          
-          // Add popup to marker
           marker.bindPopup(popupContent);
-          
-          // Open popup for first result
+
           if (index === 0 && searchResults.length === 1) {
             marker.openPopup();
           }
@@ -201,74 +182,62 @@ const MapContainer = ({
       });
     }
   }, [searchResults]);
-  
+
   // Update WMS layers
   useEffect(() => {
     if (!mapInstanceRef.current) return;
-    
+
     const map = mapInstanceRef.current;
     const currentLayerInstances = layerInstancesRef.current;
-    
-    // Get all available layers
     const allLayers = wmsService.getAllLayers();
-    
-    // Check each layer against active layers Set
-    allLayers.forEach(layer => {
-      // Layer should be active
-      if (activeLayers.has(layer.id)) {
-        // Layer is not added yet
-        if (!currentLayerInstances[layer.id]) {
-          // Create and add WMS layer
-          const wmsLayer = L.tileLayer.wms(layer.url, {
-            layers: layer.name,
-            format: 'image/png',
-            transparent: true,
-            attribution: layer.attribution || 'WMS Layer'
-          });
-          
-          // Add to map and store reference
-          wmsLayer.addTo(map);
-          currentLayerInstances[layer.id] = wmsLayer;
-        }
-      } 
-      // Layer should not be active
-      else if (currentLayerInstances[layer.id]) {
-        // Remove layer from map
-        map.removeLayer(currentLayerInstances[layer.id]);
-        delete currentLayerInstances[layer.id];
+
+    allLayers.forEach(layerConfig => {
+      const layerId = layerConfig.id;
+      const isActive = activeLayers.has(layerId);
+      const existingLayer = currentLayerInstances[layerId];
+
+      if (isActive && !existingLayer) {
+        // Add layer
+        const newLayer = L.tileLayer.wms(layerConfig.url, {
+          layers: layerConfig.layers,
+          format: layerConfig.format || 'image/png',
+          transparent: layerConfig.transparent !== undefined ? layerConfig.transparent : true,
+          attribution: layerConfig.attribution || '',
+          zIndex: layerConfig.zIndex || 10 // Ensure overlays are above base tiles
+        }).addTo(map);
+        currentLayerInstances[layerId] = newLayer;
+      } else if (!isActive && existingLayer) {
+        // Remove layer
+        map.removeLayer(existingLayer);
+        delete currentLayerInstances[layerId];
       }
     });
-    
-    // Update reference
     layerInstancesRef.current = currentLayerInstances;
   }, [activeLayers]);
-  
-  // Add map event listeners
+
+
+  // Add map event listeners (example for location found by map.locate())
   useEffect(() => {
     if (!mapInstanceRef.current) return;
-    
     const map = mapInstanceRef.current;
-    
-    // Track user location updates
+
     const handleLocationFound = (e) => {
-      const { lat, lng, accuracy } = e.latlng;
       if (onLocationUpdate) {
-        onLocationUpdate({ 
-          lat, 
-          lng, 
-          accuracy: e.accuracy 
+        onLocationUpdate({
+          lat: e.latlng.lat,
+          lng: e.latlng.lng,
+          accuracy: e.accuracy,
         });
       }
     };
-    
     map.on('locationfound', handleLocationFound);
-    
-    // Cleanup event listeners
+    // Example: map.locate({ setView: true, maxZoom: 16 }); // To trigger location finding
+
     return () => {
       map.off('locationfound', handleLocationFound);
     };
   }, [onLocationUpdate]);
-  
+
   return (
     <div className="map-container">
       {isLoading && (
@@ -277,9 +246,9 @@ const MapContainer = ({
           <p>Loading map data...</p>
         </div>
       )}
-      <div 
-        ref={mapRef} 
-        className="map-view" 
+      <div
+        ref={mapRef}
+        className="map-view"
         style={{ width: '100%', height: '100%' }}
       />
     </div>
