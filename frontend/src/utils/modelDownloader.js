@@ -1,6 +1,7 @@
 /**
  * Utility to download TensorFlow.js models for offline use with improved error handling
  */
+import * as tf from '@tensorflow/tfjs';
 
 class ModelDownloader {
   constructor() {
@@ -12,21 +13,66 @@ class ModelDownloader {
         id: 'speech-commands',
         url: 'https://storage.googleapis.com/tfjs-models/tfjs/speech-commands/v0.4/browser_fft/18w/metadata.json',
         size: 2400000, // approx size in bytes
-        description: 'Speech command recognition model'
+        description: 'Speech command recognition model',
+        // Package to import when loading this model
+        importInfo: {
+          package: '@tensorflow-models/speech-commands',
+          className: 'SpeechCommandRecognizer',
+          creator: 'create'
+        }
       },
       {
         id: 'toxicity',
         url: 'https://storage.googleapis.com/tfjs-models/tfjs/toxicity/v1/model.json',
         size: 27000000, // approx size in bytes
-        description: 'Toxicity detection for content moderation'
+        description: 'Toxicity detection for content moderation',
+        importInfo: {
+          package: '@tensorflow-models/toxicity',
+          className: 'load',
+          options: { threshold: 0.9 }
+        }
       },
       {
         id: 'posenet',
         url: 'https://storage.googleapis.com/tfjs-models/savedmodel/posenet/mobilenet/float/050/model-stride16.json',
         size: 13000000, // approx size in bytes
-        description: 'Pose estimation for gesture control'
+        description: 'Pose estimation for gesture control',
+        importInfo: {
+          package: '@tensorflow-models/posenet',
+          className: 'load',
+          options: {
+            architecture: 'MobileNetV1',
+            outputStride: 16,
+            multiplier: 0.75
+          }
+        }
       }
     ];
+
+    // Initialize TensorFlow.js backend
+    this.initializeTfBackend();
+  }
+
+  /**
+   * Initialize TensorFlow.js backend
+   */
+  async initializeTfBackend() {
+    try {
+      // Use WebGL backend if available for better performance, fall back to CPU
+      await tf.setBackend('webgl');
+      await tf.ready();
+      console.log('TensorFlow.js is loaded, version:', tf.version.tfjs);
+      console.log('Using backend:', tf.getBackend());
+    } catch (error) {
+      console.warn('Failed to initialize WebGL backend, falling back to CPU:', error);
+      try {
+        await tf.setBackend('cpu');
+        await tf.ready();
+        console.log('TensorFlow.js is using CPU backend, version:', tf.version.tfjs);
+      } catch (cpuError) {
+        console.error('Failed to initialize TensorFlow.js:', cpuError);
+      }
+    }
   }
 
   /**
@@ -98,29 +144,37 @@ class ModelDownloader {
         return false;
       }
 
-      // Using TensorFlow.js loadGraphModel to check if model is loaded
-      // This requires tfjs to be loaded, so let's just check if the model info exists in indexedDB
-      const db = await this.openModelDatabase();
-      
-      return new Promise((resolve) => {
-        const transaction = db.transaction('models', 'readonly');
-        const store = transaction.objectStore('models');
-        const request = store.get(modelId);
+      // Using TensorFlow.js to check if model exists in IndexedDB
+      try {
+        const modelInfo = await tf.io.listModels();
+        const modelPath = `indexeddb://${this.indexedDbName}/${modelId}`;
+        return modelInfo[modelPath] !== undefined;
+      } catch (error) {
+        console.warn(`Error checking model in IndexedDB: ${error}`);
         
-        request.onsuccess = () => {
-          const modelInfo = request.result;
-          resolve(!!modelInfo && modelInfo.downloaded);
-        };
+        // Fall back to our manual database check
+        const db = await this.openModelDatabase();
         
-        request.onerror = () => {
-          console.error(`Error checking if model ${modelId} is downloaded:`, request.error);
-          resolve(false);
-        };
-        
-        transaction.oncomplete = () => {
-          db.close();
-        };
-      });
+        return new Promise((resolve) => {
+          const transaction = db.transaction('models', 'readonly');
+          const store = transaction.objectStore('models');
+          const request = store.get(modelId);
+          
+          request.onsuccess = () => {
+            const modelInfo = request.result;
+            resolve(!!modelInfo && modelInfo.downloaded);
+          };
+          
+          request.onerror = () => {
+            console.error(`Error checking if model ${modelId} is downloaded:`, request.error);
+            resolve(false);
+          };
+          
+          transaction.oncomplete = () => {
+            db.close();
+          };
+        });
+      }
     } catch (error) {
       console.error(`Error checking if model ${modelId} is downloaded:`, error);
       return false;
@@ -178,17 +232,67 @@ class ModelDownloader {
       this.modelStatus.set(modelId, 'downloading');
       if (progressCallback) progressCallback(0);
 
-      // This would use TensorFlow.js to load and save the model
-      // For now, we'll just simulate a download with a progress indicator
-      
-      let progress = 0;
-      const totalIterations = 10; // Simulate 10 chunks
-      
-      // Simulate progress with delay
-      for (let i = 1; i <= totalIterations; i++) {
-        await new Promise(resolve => setTimeout(resolve, 300));
-        progress = Math.floor((i / totalIterations) * 100);
-        if (progressCallback) progressCallback(progress);
+      // Actual model loading and saving
+      try {
+        // Dynamically import the model package
+        const modelModule = await this.dynamicallyImportModel(model.importInfo.package);
+        
+        if (!modelModule) {
+          throw new Error(`Failed to import model package ${model.importInfo.package}`);
+        }
+        
+        // Create model instance based on the model type
+        let modelInstance;
+        
+        if (progressCallback) progressCallback(30);
+        
+        // Different loading methods depending on the model
+        switch (modelId) {
+          case 'speech-commands': {
+            // Speech Commands model requires explicit initialization
+            const recognizer = modelModule[model.importInfo.creator]('BROWSER_FFT');
+            await recognizer.ensureModelLoaded();
+            modelInstance = recognizer;
+            break;
+          }
+            
+          case 'toxicity': {
+            // Toxicity model takes a threshold parameter
+            const options = model.importInfo.options || { threshold: 0.9 };
+            modelInstance = await modelModule[model.importInfo.className](options);
+            break;
+          }
+            
+          case 'posenet': {
+            // PoseNet model takes configuration options
+            const options = model.importInfo.options || {};
+            modelInstance = await modelModule[model.importInfo.className](options);
+            break;
+          }
+            
+          default:
+            throw new Error(`Unsupported model type: ${modelId}`);
+        }
+        
+        if (progressCallback) progressCallback(70);
+        
+        // Save the model to IndexedDB for offline use
+        if (modelInstance) {
+          const modelPath = `indexeddb://${this.indexedDbName}/${modelId}`;
+          
+          if ('save' in modelInstance) {
+            await modelInstance.save(modelPath);
+          } else if (modelInstance.model && 'save' in modelInstance.model) {
+            await modelInstance.model.save(modelPath);
+          } else {
+            console.warn('Model does not have direct save method, storing metadata only');
+          }
+        }
+        
+        if (progressCallback) progressCallback(90);
+      } catch (error) {
+        console.error(`Error loading model ${modelId}:`, error);
+        throw error;
       }
 
       // After download completes, store model info in IndexedDB
@@ -234,6 +338,30 @@ class ModelDownloader {
   }
 
   /**
+   * Dynamically import a TensorFlow.js model package
+   * @param {string} packageName Name of the package to import
+   * @returns {Promise<any>} The imported module
+   */
+  async dynamicallyImportModel(packageName) {
+    try {
+      switch (packageName) {
+        case '@tensorflow-models/speech-commands':
+          return await import('@tensorflow-models/speech-commands');
+        case '@tensorflow-models/toxicity':
+          return await import('@tensorflow-models/toxicity');
+        case '@tensorflow-models/posenet':
+          return await import('@tensorflow-models/posenet');
+        default:
+          console.error(`Unknown package: ${packageName}`);
+          return null;
+      }
+    } catch (error) {
+      console.error(`Error importing ${packageName}:`, error);
+      return null;
+    }
+  }
+
+  /**
    * Delete a downloaded model
    * @param {string} modelId The ID of the model to delete
    * @returns {Promise<boolean>} True if deletion was successful
@@ -247,8 +375,14 @@ class ModelDownloader {
       // Update status
       this.modelStatus.set(modelId, 'deleting');
 
-      // This would use TensorFlow.js to remove the model
-      // For now, we'll just update our database
+      // Delete the model from TensorFlow.js model store
+      try {
+        const modelPath = `indexeddb://${this.indexedDbName}/${modelId}`;
+        await tf.io.removeModel(modelPath);
+      } catch (error) {
+        console.warn(`Error removing TensorFlow model from IndexedDB: ${error}`);
+        // Continue with deletion from our own database
+      }
       
       const db = await this.openModelDatabase();
       
@@ -319,19 +453,90 @@ class ModelDownloader {
         }
       }
       
-      // In a real implementation, this would use TensorFlow.js to load the model
-      // For now, we'll just return a placeholder
-      console.log(`Model ${modelId} loaded successfully (simulated)`);
+      // Load the model package and create the model instance
+      const model = this.supportedModels.find(m => m.id === modelId);
+      if (!model) {
+        throw new Error(`Model ${modelId} not found in supported models`);
+      }
       
-      return {
-        id: modelId,
-        status: 'loaded',
-        // This would be the actual TensorFlow.js model in a real implementation
-        predict: (input) => {
-          console.log(`Predicting with model ${modelId} (simulated)`, input);
-          return Promise.resolve({ results: 'simulation' });
+      // Dynamically import the model package
+      const modelModule = await this.dynamicallyImportModel(model.importInfo.package);
+      if (!modelModule) {
+        throw new Error(`Failed to import model package ${model.importInfo.package}`);
+      }
+      
+      // Try to load from IndexedDB first
+      const modelPath = `indexeddb://${this.indexedDbName}/${modelId}`;
+      let modelInstance;
+      
+      try {
+        // Different loading methods depending on the model
+        switch (modelId) {
+          case 'speech-commands': {
+            // Speech Commands model requires explicit creation
+            const recognizer = modelModule[model.importInfo.creator]('BROWSER_FFT');
+            // Try loading from IndexedDB, if fails, it will use the default model
+            await recognizer.ensureModelLoaded();
+            modelInstance = recognizer;
+            break;
+          }
+            
+          case 'toxicity': {
+            // Try loading from IndexedDB first
+            try {
+              modelInstance = await tf.loadGraphModel(modelPath);
+            } catch (e) {
+              // Fall back to creating a new instance
+              const options = model.importInfo.options || { threshold: 0.9 };
+              modelInstance = await modelModule[model.importInfo.className](options);
+            }
+            break;
+          }
+            
+          case 'posenet': {
+            // Try loading from IndexedDB first
+            try {
+              modelInstance = await tf.loadGraphModel(modelPath);
+            } catch (e) {
+              // Fall back to creating a new instance
+              const options = model.importInfo.options || {};
+              modelInstance = await modelModule[model.importInfo.className](options);
+            }
+            break;
+          }
+            
+          default:
+            throw new Error(`Unsupported model type: ${modelId}`);
         }
-      };
+        
+        console.log(`Model ${modelId} loaded successfully`);
+        
+        return {
+          id: modelId,
+          status: 'loaded',
+          model: modelInstance,
+          predict: async (input) => {
+            try {
+              switch (modelId) {
+                case 'speech-commands':
+                  return await modelInstance.recognize(input);
+                case 'toxicity':
+                  return await modelInstance.classify(input);
+                case 'posenet':
+                  return await modelInstance.estimatePoses(input);
+                default:
+                  throw new Error(`Prediction not implemented for model ${modelId}`);
+              }
+            } catch (error) {
+              console.error(`Error during prediction with model ${modelId}:`, error);
+              throw error;
+            }
+          }
+        };
+      } catch (error) {
+        console.error(`Error loading model ${modelId}:`, error);
+        throw error;
+      }
     } catch (error) {
       console.error(`Error loading model ${modelId}:`, error);
       return null;
