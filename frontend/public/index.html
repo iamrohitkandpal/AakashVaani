@@ -85,44 +85,43 @@
                 50% { opacity: 1; }
                 100% { opacity: 0.6; }
             }
+            
+            .loading-screen.hidden {
+                display: none;
+            }
         </style>
     </head>
     <body>
         <noscript>You need to enable JavaScript to run this app.</noscript>
         
-        <!-- Initial loading screen -->
         <div class="loading-screen" id="loading-screen">
             <div class="loading-icon">🌏</div>
-            <div class="loading-text">Loading EchoMap...</div>
+            <div class="loading-text">Loading Aakash Vaani...</div>
         </div>
         
         <div id="root"></div>
         
-        <!-- Inline script to hide loading screen when app loads -->
         <script>
-            window.addEventListener('load', function() {
-                setTimeout(function() {
-                    const loadingScreen = document.getElementById('loading-screen');
-                    if (loadingScreen) {
-                        loadingScreen.style.opacity = '0';
-                        loadingScreen.style.transition = 'opacity 0.5s ease';
-                        setTimeout(function() {
-                            loadingScreen.style.display = 'none';
-                        }, 500);
+            document.addEventListener('DOMContentLoaded', function() {
+                const rootElement = document.getElementById('root');
+                const loadingScreen = document.getElementById('loading-screen');
+
+                if (!rootElement || !loadingScreen) return;
+
+                const observer = new MutationObserver(function(mutationsList, observer) {
+                    if (rootElement.hasChildNodes()) {
+                        loadingScreen.classList.add('hidden'); // Use class to hide
+                        observer.disconnect();
                     }
-                }, 300); // Small delay to ensure React has started rendering
-            });
-            
-            // Register service worker
-            if ('serviceWorker' in navigator) {
-                window.addEventListener('load', function() {
-                    navigator.serviceWorker.register('/service-worker.js').then(function(registration) {
-                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
-                    }, function(err) {
-                        console.log('ServiceWorker registration failed: ', err);
-                    });
                 });
-            }
+                observer.observe(rootElement, { childList: true });
+
+                setTimeout(function() {
+                    if (!loadingScreen.classList.contains('hidden')) {
+                        loadingScreen.classList.add('hidden');
+                    }
+                }, 3000); // Fallback timeout
+            });
         </script>
         
         <!-- Leaflet JS (loaded after app to avoid render blocking) -->

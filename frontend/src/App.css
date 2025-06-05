@@ -255,6 +255,11 @@ body {
 .mic-button.disabled {
   background-color: var(--mid-gray);
   cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.mic-button.disabled:hover {
+  background-color: var(--mid-gray);
 }
 
 .mic-icon {
@@ -278,16 +283,22 @@ body {
 
 .transcript-container {
   margin-top: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  background-color: rgba(255, 255, 255, 0.1);
-  border-radius: var(--radius-md);
-  min-height: 3rem;
-  display: flex;
-  align-items: center;
+  padding: var(--space-sm);
+  background-color: rgba(0,0,0,0.2);
+  border-radius: var(--radius-sm);
+  min-height: 40px;
+  border: 1px solid var(--mid-gray);
 }
 
 .interim-transcript {
-  color: var(--lightest-gray);
+  color: var(--light-gray);
+  font-style: italic;
+  font-size: 0.85rem;
+}
+
+.final-transcript-display {
+  color: var(--white);
+  font-weight: 500;
   font-size: 0.9rem;
 }
 
@@ -535,6 +546,47 @@ body {
   100% {
     box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
   }
+}
+
+/* POI Categories Panel */
+.poi-categories-panel {
+  margin-top: var(--space-md); /* Or remove if panel-container handles gap */
+}
+
+.poi-categories-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.poi-category-button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  background-color: var(--dark-gray); /* Consistent with panel items */
+  color: var(--lightest-gray);
+  border: 1px solid var(--mid-gray);
+  border-radius: var(--radius-md);
+  padding: calc(var(--space-sm) * 0.8) var(--space-md); /* Slightly smaller padding */
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-align: left;
+}
+
+.poi-category-button:hover {
+  background-color: var(--mid-gray);
+  border-color: var(--light-gray);
+  transform: translateY(-1px);
+}
+
+.poi-category-icon {
+  font-size: 1rem; /* Adjust as needed */
+  margin-right: var(--space-xs);
+}
+
+.poi-category-name {
+  white-space: nowrap;
 }
 
 /* Responsive Styles */

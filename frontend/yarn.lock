@@ -1845,6 +1845,28 @@
     "@svgr/plugin-svgo" "^5.5.0"
     loader-utils "^2.0.0"
 
+"@tensorflow-models/posenet@^2.2.2":
+  version "2.2.2"
+  resolved "https://registry.yarnpkg.com/@tensorflow-models/posenet/-/posenet-2.2.2.tgz#2abcfa33b43892135d232c9c4408a38cc8f74ba6"
+  integrity sha512-0SXIksRet/IdX7WVH+JSD6W3upkGHix1hwtd3xykIoIMGR7zQ4SC5+wZcNt9ofASyxNYQoI+tUULUo4LNw0c3w==
+
+"@tensorflow-models/speech-commands@^0.5.4":
+  version "0.5.4"
+  resolved "https://registry.yarnpkg.com/@tensorflow-models/speech-commands/-/speech-commands-0.5.4.tgz#d1065c22d2a83a1e64247318ef2f83f9c4c8182b"
+  integrity sha512-r0c/MvC15/09xWujx1pKe6mA0nta+4jQWDXGkqfSVkXLo8ARrwcZ4mTGLlfvT43ySfidiveUo0m+P51+UK821Q==
+
+"@tensorflow-models/toxicity@^1.2.2":
+  version "1.2.2"
+  resolved "https://registry.yarnpkg.com/@tensorflow-models/toxicity/-/toxicity-1.2.2.tgz#aed2cc92122f2fc949b42502bb55f8ed2e1d03a8"
+  integrity sha512-DSMIoBzNyX7+4D4cGKjsFLbCuJz3bksYpwFHKAjTp4+tmgAGpNyg5nDXXI/IQp18nMTbLKgLruLWOxq5y7P4WQ==
+  dependencies:
+    "@tensorflow-models/universal-sentence-encoder" "~1.2.2"
+
+"@tensorflow-models/universal-sentence-encoder@~1.2.2":
+  version "1.2.2"
+  resolved "https://registry.yarnpkg.com/@tensorflow-models/universal-sentence-encoder/-/universal-sentence-encoder-1.2.2.tgz#27a38c39424b5e85389ac461be177c9f44ba19bd"
+  integrity sha512-fGCl/gwB7jmKCRI2FhgIBeIa/LCSUcjlEcckH2Bc2dIjhJ+2nspp+22lubxcseN6jjrmP42kkXt/reAPe+KJkQ==
+
 "@tensorflow/tfjs-backend-cpu@4.22.0":
   version "4.22.0"
   resolved "https://registry.yarnpkg.com/@tensorflow/tfjs-backend-cpu/-/tfjs-backend-cpu-4.22.0.tgz#72aeaab14f6f16bbd995c9e6751a8d094d5639a9"
