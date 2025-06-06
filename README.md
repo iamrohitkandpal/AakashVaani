@@ -32,13 +32,13 @@ The application is built as a progressive web app (PWA), allowing offline functi
 
 ### Codebase Summary
 
-| Category | Files | Lines of Code | % of Codebase |
-|----------|-------|---------------|---------------|
-| Frontend JavaScript | 12 | 1,742 | 50.0% |
-| Frontend CSS/HTML | 4 | 818 | 23.5% |
-| Backend Python | 4 | 353 | 10.1% |
-| Configuration | 10 | 574 | 16.4% |
-| **Total** | **30** | **3,487** | **100%** |
+| Category            | Files  | Lines of Code | % of Codebase |
+| ------------------- | ------ | ------------- | ------------- |
+| Frontend JavaScript | 12     | 1,742         | 50.0%         |
+| Frontend CSS/HTML   | 4      | 818           | 23.5%         |
+| Backend Python      | 4      | 353           | 10.1%         |
+| Configuration       | 10     | 574           | 16.4%         |
+| **Total**           | **30** | **3,487**     | **100%**      |
 
 ### Component Breakdown
 
@@ -55,13 +55,13 @@ The application is built as a progressive web app (PWA), allowing offline functi
 
 ### Tech Stack
 
-| Category | Technologies |
-|----------|-------------|
-| Frontend | React, Leaflet, Web Speech API, Service Workers, IndexedDB |
-| Backend | FastAPI, Python, MongoDB |
-| DevOps | Docker, Nginx, Supervisor |
-| Data Sources | OpenStreetMap, Nominatim API, Weather APIs |
-| ML Models | TensorFlow.js for offline speech recognition |
+| Category     | Technologies                                               |
+| ------------ | ---------------------------------------------------------- |
+| Frontend     | React, Leaflet, Web Speech API, Service Workers, IndexedDB |
+| Backend      | FastAPI, Python, MongoDB                                   |
+| DevOps       | Docker, Nginx, Supervisor                                  |
+| Data Sources | OpenStreetMap, Nominatim API, Weather APIs                 |
+| ML Models    | TensorFlow.js for offline speech recognition               |
 
 ## 🏗️ Architecture
 
@@ -145,14 +145,14 @@ docker run -p 8080:8080 -p 8001:8001 aakash-vaani
 
 Aakash Vaani responds to various voice commands. Here are some examples:
 
-| Command Type | Example Commands | Description |
-|--------------|-----------------|-------------|
-| Search | "Find restaurants near me" | Searches for points of interest |
-| Navigate | "Take me to Central Park" | Sets a destination for navigation |
-| Layers | "Show traffic layer" | Displays or hides map layers |
-| Zoom | "Zoom in", "Set zoom level 15" | Controls map zoom level |
-| Reset | "Reset map" | Returns to default map view |
-| Help | "What can I say?" | Shows available commands |
+| Command Type | Example Commands               | Description                       |
+| ------------ | ------------------------------ | --------------------------------- |
+| Search       | "Find restaurants near me"     | Searches for points of interest   |
+| Navigate     | "Take me to Central Park"      | Sets a destination for navigation |
+| Layers       | "Show traffic layer"           | Displays or hides map layers      |
+| Zoom         | "Zoom in", "Set zoom level 15" | Controls map zoom level           |
+| Reset        | "Reset map"                    | Returns to default map view       |
+| Help         | "What can I say?"              | Shows available commands          |
 
 ### Map Navigation
 
@@ -174,7 +174,7 @@ Aakash Vaani responds to various voice commands. Here are some examples:
 ```
 aakash-vaani/
 ├── backend/                 # Python FastAPI backend
-│   ├── external_integrations/ 
+│   ├── external_integrations/
 │   ├── requirements.txt     # Python dependencies
 │   └── server.py            # Main server file
 ├── frontend/                # React frontend
@@ -225,7 +225,7 @@ processCommand(command) {
   // Match patterns for different command types
   const searchPattern = /^(search|find|show me|look for)\s+(.+)$/i;
   const navigatePattern = /^(navigate|take me|go)\s+(?:to|towards|toward)\s+(.+)$/i;
-  
+
   // Check each pattern and extract parameters
   let match;
   if (match = command.match(searchPattern)) {
@@ -251,29 +251,27 @@ The app implements a service worker that caches map tiles, application assets, a
 
 ```javascript
 // Service worker cache strategy
-self.addEventListener('fetch', (event) => {
+self.addEventListener("fetch", (event) => {
   // For static assets, use cache-first strategy
   event.respondWith(
-    caches.match(event.request)
-      .then((response) => {
-        // Cache hit - return response
-        if (response) {
-          return response;
-        }
-        
-        // Not in cache - fetch from network
-        return fetch(event.request)
-          .then((networkResponse) => {
-            // Cache the network response for future use
-            if (networkResponse.status === 200) {
-              const responseToCache = networkResponse.clone();
-              caches.open(CACHE_NAME).then((cache) => {
-                cache.put(event.request, responseToCache);
-              });
-            }
-            return networkResponse;
+    caches.match(event.request).then((response) => {
+      // Cache hit - return response
+      if (response) {
+        return response;
+      }
+
+      // Not in cache - fetch from network
+      return fetch(event.request).then((networkResponse) => {
+        // Cache the network response for future use
+        if (networkResponse.status === 200) {
+          const responseToCache = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseToCache);
           });
-      })
+        }
+        return networkResponse;
+      });
+    })
   );
 });
 ```
