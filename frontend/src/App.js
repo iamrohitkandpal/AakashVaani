@@ -18,10 +18,11 @@ function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
-  const [mapCenter, setMapCenter] = useState(null);
+  const [mapCenter, setMapCenter] = useState({ lat: 28.6139, lng: 77.209 }); // Default to New Delhi
   const [mapZoom, setMapZoom] = useState(13);
   const [isLoading, setIsLoading] = useState(false);
   const [poiCategories, setPoiCategories] = useState([]);
+  const [customMarkers, setCustomMarkers] = useState([]); // New state for user-added markers
 
   // On mount, try to get user location
   useEffect(() => {
@@ -65,85 +66,208 @@ function App() {
   }, []);
 
   // Handle voice command
-  const handleVoiceCommand = useCallback((commandObj) => {
-    const commandWithTimestamp = {
-      ...commandObj,
-      timestamp: commandObj.timestamp || new Date().toISOString(),
-      status: 'processing', // Add initial status
-    };
-    setVoiceCommands((prevCommands) => [commandWithTimestamp, ...prevCommands.slice(0, 49)]); // Keep last 50
+  const handleVoiceCommand = useCallback(
+    (commandObj) => {
+      const commandWithTimestamp = {
+        ...commandObj,
+        timestamp: commandObj.timestamp || new Date().toISOString(),
+        status: "processing",
+      };
+      setVoiceCommands((prevCommands) => [
+        commandWithTimestamp,
+        ...prevCommands.slice(0, 49),
+      ]);
 
-    // Simulate processing delay for UI feedback if needed
-    setTimeout(() => {
-      setVoiceCommands(prev => prev.map(cmd => cmd.timestamp === commandWithTimestamp.timestamp ? {...cmd, status: 'completed'} : cmd));
-    }, 1000);
-
-    switch (commandObj.type) {
-      case "search": handleSearchCommand(commandObj); break;
-      case "navigate": handleNavigationCommand(commandObj); break;
-      case "layer": handleLayerCommand(commandObj); break;
-      case "zoom": handleZoomCommand(commandObj); break;
-      case "reset": handleResetCommand(); break;
-      case "help": setShowHelp(true); break;
-      case "location_query":
-        if (currentLocation) {
-          setMapCenter({ lat: currentLocation.lat, lng: currentLocation.lng });
-          setMapZoom(16);
-          // Optionally, add a marker or popup saying "This is your current location"
-        } else {
-          // Handle case where current location is not yet available
-           handleVoiceCommand({ ...commandObj, type: 'error', error: 'Current location not available yet.'});
-        }
-        break;
-      case "pan":
-        if (mapInstance) {
-            const offset = mapInstance.getSize().y / 4; // Pan by 1/4 of map height/width
+      switch (commandObj.type) {
+        case "search":
+          handleSearchCommand(commandObj);
+          break;
+        case "navigate":
+          handleNavigationCommand(commandObj);
+          break;
+        case "layer":
+          handleLayerCommand(commandObj);
+          break;
+        case "zoom":
+          handleZoomCommand(commandObj);
+          break;
+        case "reset":
+          handleResetCommand();
+          break;
+        case "help":
+          setShowHelp(true);
+          break;
+        case "location_query":
+          if (currentLocation) {
+            setMapCenter({ lat: currentLocation.lat, lng: currentLocation.lng });
+            setMapZoom(16);
+          } else {
+            updateCommandStatus(
+              commandWithTimestamp.timestamp,
+              "error",
+              "Current location not available yet."
+            );
+          }
+          break;
+        case "pan":
+          if (mapInstance) {
+            const offset = mapInstance.getSize().y / 4;
             let panBy;
-            switch(commandObj.direction) {
-                case 'left': panBy = [-offset, 0]; break;
-                case 'right': panBy = [offset, 0]; break;
-                case 'up': panBy = [0, -offset]; break;
-                case 'down': panBy = [0, offset]; break;
-                default: break;
+            switch (commandObj.direction) {
+              case "left":
+                panBy = [-offset, 0];
+                break;
+              case "right":
+                panBy = [offset, 0];
+                break;
+              case "up":
+                panBy = [0, -offset];
+                break;
+              case "down":
+                panBy = [0, offset];
+                break;
+              default:
+                break;
             }
             if (panBy) mapInstance.panBy(panBy);
+          }
+          break;
+        case "add_marker":
+          handleAddMarkerCommand(commandObj);
+          break;
+        default:
+          console.log("Unknown command type:", commandObj.type, commandObj);
+          updateCommandStatus(
+            commandWithTimestamp.timestamp,
+            "error",
+            "Unknown command"
+          );
+      }
+    },
+    [mapInstance, currentLocation]
+  );
+
+  // New handler for add marker commands
+  const handleAddMarkerCommand = async (commandObj) => {
+    let lat, lng, name;
+    name = `Marker @ ${new Date().toLocaleTimeString()}`;
+
+    if (commandObj.locationQuery) {
+      // If a location is specified in the command, geocode it
+      setIsLoading(true);
+      try {
+        const results = await geocodingService.search(commandObj.locationQuery);
+        if (results && results.length > 0) {
+          lat = results[0].lat;
+          lng = results[0].lng;
+          name = results[0].name || commandObj.locationQuery;
+
+          // Update command status
+          updateCommandStatus(commandObj.timestamp, "completed");
+        } else {
+          updateCommandStatus(
+            commandObj.timestamp,
+            "error",
+            `Could not find location: ${commandObj.locationQuery}`
+          );
+          setIsLoading(false);
+          return;
         }
-        break;
-      default:
-        console.log("Unknown command type:", commandObj.type, commandObj);
-        // Update command in log to show it was unknown/failed
-        setVoiceCommands(prev => prev.map(cmd => cmd.timestamp === commandWithTimestamp.timestamp ? {...cmd, status: 'error', error: 'Unknown command'} : cmd));
+      } catch (error) {
+        console.error("Error geocoding for add marker:", error);
+        updateCommandStatus(
+          commandObj.timestamp,
+          "error",
+          "Failed to geocode location for marker."
+        );
+        setIsLoading(false);
+        return;
+      } finally {
+        setIsLoading(false);
+      }
+    } else if (mapInstance) {
+      // Default to current map center if no location specified
+      const center = mapInstance.getCenter();
+      lat = center.lat;
+      lng = center.lng;
+
+      // Update command status
+      updateCommandStatus(commandObj.timestamp, "completed");
+    } else if (currentLocation) {
+      // Fallback to user's current location
+      lat = currentLocation.lat;
+      lng = currentLocation.lng;
+      name = "My Location";
+
+      // Update command status
+      updateCommandStatus(commandObj.timestamp, "completed");
+    } else {
+      updateCommandStatus(
+        commandObj.timestamp,
+        "error",
+        "Map or location not available to add marker."
+      );
+      return;
     }
-  }, [mapInstance, currentLocation /* other handlers */]); // Add dependencies
+
+    if (typeof lat === "number" && typeof lng === "number" && !isNaN(lat) && !isNaN(lng)) {
+      const newMarker = { lat, lng, name, id: `custom-${Date.now()}` };
+      setCustomMarkers((prevMarkers) => [...prevMarkers, newMarker]);
+
+      // Optionally, pan map to the new marker
+      setMapCenter({ lat, lng });
+      setMapZoom(Math.max(mapZoom, 15)); // Zoom in if necessary
+    } else {
+      updateCommandStatus(
+        commandObj.timestamp,
+        "error",
+        "Invalid coordinates for marker."
+      );
+    }
+  };
 
   // Handle search command
   const handleSearchCommand = async (commandObj) => {
     if (!commandObj.query) {
-      updateCommandStatus(commandObj.timestamp, 'error', 'No query provided');
+      updateCommandStatus(commandObj.timestamp, "error", "No query provided");
       return;
     }
     setIsLoading(true);
     try {
-      const results = await geocodingService.smartSearch(commandObj.query, currentLocation ? { lat: currentLocation.lat, lng: currentLocation.lng } : {});
+      const results = await geocodingService.smartSearch(
+        commandObj.query,
+        currentLocation
+          ? { lat: currentLocation.lat, lng: currentLocation.lng }
+          : {}
+      );
       setSearchResults(results);
       if (results && results.length > 0) {
         const firstResult = results[0];
-        // Ensure lat and lng are valid numbers before setting map center
-        if (firstResult && typeof firstResult.lat === 'number' && typeof firstResult.lng === 'number' && !isNaN(firstResult.lat) && !isNaN(firstResult.lng)) {
+        // Ensure lat and lng are valid numbers
+        if (firstResult &&
+            typeof firstResult.lat === 'number' && !isNaN(firstResult.lat) &&
+            typeof firstResult.lng === 'number' && !isNaN(firstResult.lng)) {
           setMapCenter({ lat: firstResult.lat, lng: firstResult.lng });
           setMapZoom(15);
-          updateCommandStatus(commandObj.timestamp, 'completed');
+          updateCommandStatus(commandObj.timestamp, "completed");
         } else {
           console.warn("First search result lacks valid coordinates:", firstResult);
-          updateCommandStatus(commandObj.timestamp, 'error', 'Search successful, but no map location found for the top result.');
-          // Do not attempt to setMapCenter if coordinates are invalid
+          updateCommandStatus(
+            commandObj.timestamp,
+            "error",
+            "Search successful, but no map location found for the top result."
+          );
         }
       } else {
-        updateCommandStatus(commandObj.timestamp, 'error', 'No results found for your search.');
+        updateCommandStatus(
+          commandObj.timestamp,
+          "error",
+          "No results found for your search."
+        );
       }
     } catch (error) {
       console.error("Search error:", error);
-      updateCommandStatus(commandObj.timestamp, 'error', error.message);
+      updateCommandStatus(commandObj.timestamp, "error", error.message);
     } finally {
       setIsLoading(false);
     }
@@ -249,18 +373,35 @@ function App() {
 
   // Helper to update command status in the log
   const updateCommandStatus = (timestamp, status, errorMessage = null) => {
-    setVoiceCommands(prev => prev.map(cmd =>
-      cmd.timestamp === timestamp
-        ? { ...cmd, status: status, error: errorMessage }
-        : cmd
-    ));
+    setVoiceCommands((prev) =>
+      prev.map((cmd) =>
+        cmd.timestamp === timestamp
+          ? { ...cmd, status: status, error: errorMessage }
+          : cmd
+      )
+    );
   };
 
+  // Update handlePoiCategorySearch to handle errors better
   const handlePoiCategorySearch = (categoryKey) => {
-    const category = poiCategories.find(c => c.key === categoryKey);
+    const category = poiCategories.find((c) => c.key === categoryKey);
     if (category) {
-      // Trigger a search command
-      handleVoiceCommand({ type: 'search', query: category.name, timestamp: new Date().toISOString() });
+      const timestamp = new Date().toISOString();
+      // Create a proper command object with timestamp
+      const commandObj = {
+        type: "search",
+        query: category.name,
+        timestamp: timestamp
+      };
+      
+      // Update voice commands list with initial status
+      setVoiceCommands(prev => [{
+        ...commandObj,
+        status: "processing"
+      }, ...prev.slice(0, 49)]);
+      
+      // Process the command
+      handleSearchCommand(commandObj);
     }
   };
 
@@ -278,8 +419,13 @@ function App() {
               <button
                 className="help-button"
                 onClick={() => setShowHelp(!showHelp)}
+                aria-expanded={showHelp}
+                aria-controls="help-modal"
               >
-                {showHelp ? "Close Help" : "Help"}
+                <span className="help-button-icon">❓</span>
+                <span className="help-button-text">
+                  {showHelp ? "Close Help" : "Help"}
+                </span>
               </button>
             </div>
           </div>
@@ -295,85 +441,47 @@ function App() {
                 mapInstance={mapInstance}
                 currentLocation={currentLocation}
                 activeLayers={activeLayers}
-                onLayerChange={handleLayerChange}
+                // onLayerChange={handleLayerChange} // This prop might not be used by VoiceNavigator
               />
 
-              {/* POI Categories */}
               {poiCategories.length > 0 && (
                 <div className="collapsible-panel expanded poi-categories-panel">
                   <div className="panel-header">
                     <h2>Explore Nearby</h2>
                   </div>
                   <div className="panel-content poi-categories-list">
-                    {poiCategories.map(category => (
+                    {poiCategories.map((category) => (
                       <button
                         key={category.key}
                         className="poi-category-button"
                         onClick={() => handlePoiCategorySearch(category.key)}
                         title={`Search for ${category.name}`}
                       >
-                        <span className="poi-category-icon">{category.icon}</span>
-                        <span className="poi-category-name">{category.name}</span>
+                        <span className="poi-category-icon">
+                          {category.icon}
+                        </span>
+                        <span className="poi-category-name">
+                          {category.name}
+                        </span>
                       </button>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* Command History */}
               <div className="collapsible-panel expanded">
                 <div className="panel-header">
                   <h2>Command History</h2>
                   {voiceCommands.length > 0 && (
-                    <span className="command-count">{voiceCommands.length}</span>
+                    <span className="command-count">
+                      {voiceCommands.length}
+                    </span>
                   )}
                 </div>
                 <div className="panel-content">
                   <VoiceCommandLog commands={voiceCommands} />
                 </div>
               </div>
-
-              {/* Help Panel */}
-              {showHelp && (
-                <div className="collapsible-panel expanded">
-                  <div className="panel-header">
-                    <h2>Voice Commands Help</h2>
-                    <button
-                      className="panel-toggle"
-                      onClick={() => setShowHelp(false)}
-                    >
-                      Close
-                    </button>
-                  </div>
-                  <div className="panel-content">
-                    <h3>Available Commands:</h3>
-                    <ul style={{ listStyleType: "'🎙️ '" , paddingLeft: '20px'}}>
-                      <li>
-                        <strong>Search:</strong> "Find restaurants near me", "Where is the Eiffel Tower?"
-                      </li>
-                      <li>
-                        <strong>Navigate:</strong> "Take me to Central Park", "Directions to 123 Main St"
-                      </li>
-                      <li>
-                        <strong>Layers:</strong> "Show traffic layer", "Hide satellite map", "Toggle weather"
-                        <br /><em>Try: traffic, satellite, terrain, transit, bike, cycle, railway, sea, hiking, outdoors, topo, precipitation, temperature, wind, clouds, roads, buildings, borders.</em>
-                      </li>
-                      <li>
-                        <strong>Zoom:</strong> "Zoom in", "Zoom out", "Set zoom level to 15"
-                      </li>
-                      <li>
-                        <strong>Reset:</strong> "Reset map", "Clear view"
-                      </li>
-                       <li>
-                        <strong>Location:</strong> "Where am I?", "Show my current location"
-                      </li>
-                       <li>
-                        <strong>Map Interaction (Experimental):</strong> "Pan left", "Pan right", "Pan up", "Pan down"
-                      </li>
-                    </ul>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 
@@ -385,15 +493,13 @@ function App() {
                   <MapContainer
                     onMapReady={setMapInstance}
                     onLocationUpdate={(loc) => {
-                        // This callback might be from map.locate()
-                        setCurrentLocation(loc);
-                        // Optionally center map on this type of update too
-                        // setMapCenter({ lat: loc.lat, lng: loc.lng });
+                      setCurrentLocation(loc);
                     }}
                     voiceStatus={voiceStatus}
                     activeLayers={activeLayers}
                     currentLocation={currentLocation}
                     searchResults={searchResults}
+                    customMarkers={customMarkers} // Pass custom markers to MapContainer
                     center={mapCenter}
                     zoom={mapZoom}
                     isLoading={isLoading}
@@ -403,6 +509,205 @@ function App() {
             </Routes>
           </div>
         </main>
+
+        {/* Help Modal */}
+        {showHelp && (
+          <div className="help-modal-overlay" onClick={() => setShowHelp(false)}>
+            <div
+              className="help-modal-content"
+              onClick={(e) => e.stopPropagation()}
+              id="help-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="help-modal-title"
+            >
+              <div className="help-modal-header">
+                <h2 id="help-modal-title">Voice Commands & Map Features</h2>
+                <button
+                  className="help-modal-close-button"
+                  onClick={() => setShowHelp(false)}
+                  aria-label="Close help"
+                >
+                  &times;
+                </button>
+              </div>
+              <div className="help-modal-body">
+                <div className="help-modal-section">
+                  <h3>Voice Commands</h3>
+                  <p className="help-description">
+                    Control the map using your voice with these commands:
+                  </p>
+
+                  <div className="help-category">
+                    <h4>Search & Navigation</h4>
+                    <ul className="command-examples">
+                      <li>
+                        <strong>Search for locations:</strong> "Find restaurants near
+                        me", "Show hospitals in Delhi", "Where is the Eiffel Tower?"
+                      </li>
+                      <li>
+                        <strong>Navigate:</strong> "Take me to Central Park",
+                        "Directions to Taj Mahal", "Route to 123 Main Street"
+                      </li>
+                      <li>
+                        <strong>Points of Interest:</strong> "Find parks nearby",
+                        "Show me coffee shops", "Where are the nearest ATMs?"
+                      </li>
+                    </ul>
+                  </div>
+
+                  <div className="help-category">
+                    <h4>Map Controls</h4>
+                    <ul className="command-examples">
+                      <li>
+                        <strong>Pan the map:</strong> "Pan left", "Pan right", "Pan up",
+                        "Pan down"
+                      </li>
+                      <li>
+                        <strong>Zoom control:</strong> "Zoom in", "Zoom out", "Set zoom
+                        level to 15"
+                      </li>
+                      <li>
+                        <strong>Reset view:</strong> "Reset map", "Clear view", "Start
+                        over"
+                      </li>
+                      <li>
+                        <strong>Current location:</strong> "Where am I?", "Show my
+                        current location", "Center on me"
+                      </li>
+                      <li>
+                        <strong>Add markers:</strong> "Add marker", "Drop pin at Eiffel
+                        Tower", "Place marker here", "Mark this location"
+                      </li>
+                    </ul>
+                  </div>
+
+                  <div className="help-category">
+                    <h4>Map Layers & Data Visualization</h4>
+                    <ul className="command-examples">
+                      <li>
+                        <strong>Base Maps:</strong> "Show standard map", "Show satellite",
+                        "Switch to terrain"
+                      </li>
+                      <li>
+                        <strong>Transportation:</strong> "Show traffic layer", "Show transit
+                        layer", "Show railway map", "Show cycling routes"
+                      </li>
+                      <li>
+                        <strong>Weather:</strong> "Show precipitation", "Show temperature",
+                        "Show clouds", "Show wind"
+                      </li>
+                      <li>
+                        <strong>Terrain:</strong> "Show topographic map", "Show elevation",
+                        "Show contour lines"
+                      </li>
+                      <li>
+                        <strong>Other Layers:</strong> "Show humanitarian layer", "Show sea
+                        map", "Show hiking trails"
+                      </li>
+                    </ul>
+                    <p>
+                      <em>
+                        Try toggling layers with "show", "hide" or "toggle" followed by the
+                        layer name.
+                      </em>
+                    </p>
+                  </div>
+                </div>
+
+                <div className="help-modal-section">
+                  <h3>Map Data Sources</h3>
+                  <p className="help-description">
+                    Aakash Vaani integrates various map data sources for rich geospatial
+                    information:
+                  </p>
+
+                  <div className="help-sources">
+                    <div className="help-source">
+                      <h4>Base Maps</h4>
+                      <ul>
+                        <li>
+                          <strong>OpenStreetMap:</strong> Comprehensive worldwide mapping
+                          data
+                        </li>
+                        <li>
+                          <strong>ESRI Satellite:</strong> High-resolution satellite imagery
+                        </li>
+                        <li>
+                          <strong>CartoDB:</strong> Beautiful cartographic base layers
+                        </li>
+                        <li>
+                          <strong>Stamen Maps:</strong> Artistic map renderings
+                        </li>
+                      </ul>
+                    </div>
+
+                    <div className="help-source">
+                      <h4>Specialized Data</h4>
+                      <ul>
+                        <li>
+                          <strong>OpenWeatherMap:</strong> Real-time weather data
+                          visualization
+                        </li>
+                        <li>
+                          <strong>NASA GIBS:</strong> Earth observation satellite imagery
+                        </li>
+                        <li>
+                          <strong>OpenTopoMap:</strong> Detailed topographic information
+                        </li>
+                        <li>
+                          <strong>OpenRailwayMap:</strong> Global railway network data
+                        </li>
+                        <li>
+                          <strong>CyclOSM:</strong> Bicycle route and infrastructure data
+                        </li>
+                        <li>
+                          <strong>Humanitarian OSM:</strong> Maps for humanitarian response
+                        </li>
+                        <li>
+                          <strong>Bhuvan:</strong> Indian Space Research Organisation's
+                          geoportal
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="help-modal-section">
+                  <h3>Voice Recognition Modes</h3>
+                  <div className="recognition-modes">
+                    <div className="recognition-mode">
+                      <h4>
+                        Web Speech API{" "}
+                        <span className="mode-default">(Default)</span>
+                      </h4>
+                      <p>
+                        Uses your browser's speech recognition for accurate, comprehensive
+                        command processing. Requires internet connection and sends audio to
+                        cloud services.
+                      </p>
+                    </div>
+
+                    <div className="recognition-mode">
+                      <h4>
+                        TensorFlow.js{" "}
+                        <span className="mode-privacy">(Privacy-Focused)</span>
+                      </h4>
+                      <p>
+                        On-device speech recognition using machine learning. Works offline and
+                        keeps your voice data on your device. Limited to basic commands but
+                        better for privacy.
+                      </p>
+                    </div>
+                  </div>
+                  <p className="toggle-tip">
+                    Switch between modes using the toggle button below the microphone.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </Router>
   );
