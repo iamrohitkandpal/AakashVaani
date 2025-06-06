@@ -1,44 +1,56 @@
-import React, { useEffect, useRef } from 'react';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-import { wmsService } from '../services/WMSService';
+import React, { useEffect, useRef } from "react";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+import { wmsService } from "../services/WMSService";
 
 // Fix for default markers in React Leaflet
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconRetinaUrl:
+    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png",
+  iconUrl:
+    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
+  shadowUrl:
+    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
 });
 
 const DEFAULT_CENTER = [28.6139, 77.209]; // Default to New Delhi or a global neutral like [51.505, -0.09]
 const DEFAULT_ZOOM = 13;
 
 // Custom marker icons (assuming these are defined in your App.css or here)
-const createCustomIcon = (iconUrl, size = [25, 41], anchor = [12, 41], popupAnchor = [0, -41]) => {
+const createCustomIcon = (
+  iconUrl,
+  size = [25, 41],
+  anchor = [12, 41],
+  popupAnchor = [0, -41]
+) => {
   return L.icon({
     iconUrl,
     iconSize: size,
     iconAnchor: anchor,
-    popupAnchor: popupAnchor
+    popupAnchor: popupAnchor,
   });
 };
 
 const locationIcon = createCustomIcon(
-  'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png'
+  "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png"
 );
 
 const searchResultIcon = createCustomIcon(
-  'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png'
+  "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png"
 );
 
 const pulsingLocationIcon = L.divIcon({
-  className: 'pulsing-location-marker', // Ensure this class is defined in App.css
+  className: "pulsing-location-marker", // Ensure this class is defined in App.css
   html: '<div class="pulsing-dot"></div>', // Ensure .pulsing-dot is styled
   iconSize: [20, 20],
-  iconAnchor: [10, 10]
+  iconAnchor: [10, 10],
 });
 
+// Add a custom marker icon for user-added markers
+const customMarkerIcon = createCustomIcon(
+  "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png"
+);
 
 const MapContainer = ({
   onMapReady,
@@ -47,36 +59,39 @@ const MapContainer = ({
   activeLayers,
   currentLocation,
   searchResults,
+  customMarkers, // New prop for custom markers
   center,
   zoom,
-  isLoading
+  isLoading,
 }) => {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const markersLayerRef = useRef(null);
+  const customMarkersLayerRef = useRef(null); // New layer group for custom markers
   const layerInstancesRef = useRef({});
-  // Removed 'initialized' state, mapInstanceRef.current will serve this purpose
 
   // Initialize map instance
   useEffect(() => {
     if (mapRef.current && !mapInstanceRef.current) {
       const initialMapCenter = center || DEFAULT_CENTER;
-      const initialMapZoom = typeof zoom === 'number' ? zoom : DEFAULT_ZOOM;
+      const initialMapZoom = typeof zoom === "number" ? zoom : DEFAULT_ZOOM;
 
       const map = L.map(mapRef.current, {
-          // prefer passing options here rather than chaining setView immediately
-          center: initialMapCenter,
-          zoom: initialMapZoom,
+        // prefer passing options here rather than chaining setView immediately
+        center: initialMapCenter,
+        zoom: initialMapZoom,
       });
 
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
         maxZoom: 19,
-        minZoom: 3
+        minZoom: 3,
       }).addTo(map);
 
       mapInstanceRef.current = map;
       markersLayerRef.current = L.layerGroup().addTo(map);
+      customMarkersLayerRef.current = L.layerGroup().addTo(map); // Initialize custom markers layer
 
       if (onMapReady) {
         onMapReady(map);
@@ -93,26 +108,51 @@ const MapContainer = ({
         markersLayerRef.current.remove();
         markersLayerRef.current = null;
       }
+      if (customMarkersLayerRef.current) {
+        customMarkersLayerRef.current.remove();
+        customMarkersLayerRef.current = null;
+      }
       layerInstancesRef.current = {};
     };
   }, [onMapReady]); // Initialize only once. onMapReady is a prop.
 
   // Update map view when center or zoom props change
   useEffect(() => {
-    if (mapInstanceRef.current && center && typeof zoom === 'number') {
-      mapInstanceRef.current.setView(center, zoom);
+    if (mapInstanceRef.current) {
+      // Only update view if center coordinates are valid numbers
+      if (
+        center &&
+        typeof center.lat === "number" &&
+        !isNaN(center.lat) &&
+        typeof center.lng === "number" &&
+        !isNaN(center.lng) &&
+        typeof zoom === "number"
+      ) {
+        mapInstanceRef.current.setView([center.lat, center.lng], zoom);
+      } else {
+        console.warn("Invalid map coordinates or zoom:", { center, zoom });
+        // If invalid coordinates are provided, use the default
+        if (
+          DEFAULT_CENTER &&
+          !isNaN(DEFAULT_CENTER[0]) &&
+          !isNaN(DEFAULT_CENTER[1])
+        ) {
+          mapInstanceRef.current.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+        }
+      }
     }
   }, [center, zoom]);
 
   // Handle user location updates
   useEffect(() => {
-    if (!mapInstanceRef.current || !markersLayerRef.current || !currentLocation) return;
+    if (!mapInstanceRef.current || !markersLayerRef.current || !currentLocation)
+      return;
 
     const map = mapInstanceRef.current;
     const markersLayer = markersLayerRef.current;
 
     // Clear existing location markers (ones with locationMarker: true option)
-    markersLayer.eachLayer(layer => {
+    markersLayer.eachLayer((layer) => {
       if (layer.options.locationMarker) {
         markersLayer.removeLayer(layer);
       }
@@ -120,22 +160,22 @@ const MapContainer = ({
 
     // Add location marker
     const marker = L.marker([currentLocation.lat, currentLocation.lng], {
-      icon: voiceStatus === 'listening' ? pulsingLocationIcon : locationIcon,
+      icon: voiceStatus === "listening" ? pulsingLocationIcon : locationIcon,
       locationMarker: true, // Custom option to identify this marker
-      zIndexOffset: 1000
+      zIndexOffset: 1000,
     }).addTo(markersLayer);
 
-    marker.bindPopup('<b>Your Location</b>');
+    marker.bindPopup("<b>Your Location</b>");
 
     // Add accuracy circle if available
     if (currentLocation.accuracy) {
       const circle = L.circle([currentLocation.lat, currentLocation.lng], {
         radius: currentLocation.accuracy,
-        color: '#3388ff',
-        fillColor: '#3388ff',
+        color: "#3388ff",
+        fillColor: "#3388ff",
         fillOpacity: 0.1,
         weight: 1,
-        locationMarker: true // Custom option to identify this circle
+        locationMarker: true, // Custom option to identify this circle
       }).addTo(markersLayer);
     }
   }, [currentLocation, voiceStatus]);
@@ -147,7 +187,7 @@ const MapContainer = ({
     const markersLayer = markersLayerRef.current;
 
     // Clear existing search result markers (ones without locationMarker: true)
-    markersLayer.eachLayer(layer => {
+    markersLayer.eachLayer((layer) => {
       if (!layer.options.locationMarker) {
         markersLayer.removeLayer(layer);
       }
@@ -158,10 +198,12 @@ const MapContainer = ({
       searchResults.forEach((result, index) => {
         if (result.lat && result.lng) {
           const marker = L.marker([result.lat, result.lng], {
-            icon: searchResultIcon
+            icon: searchResultIcon,
           }).addTo(markersLayer);
 
-          let popupContent = `<div class="search-result-popup"><h3>${result.name || 'Search Result'}</h3>`;
+          let popupContent = `<div class="search-result-popup"><h3>${
+            result.name || "Search Result"
+          }</h3>`;
           if (result.type) {
             popupContent += `<p class="result-type">${result.type}</p>`;
           }
@@ -183,6 +225,37 @@ const MapContainer = ({
     }
   }, [searchResults]);
 
+  // Handle custom markers
+  useEffect(() => {
+    if (!mapInstanceRef.current || !customMarkersLayerRef.current) return;
+
+    const layerGroup = customMarkersLayerRef.current;
+    layerGroup.clearLayers(); // Clear previous custom markers
+
+    if (customMarkers && customMarkers.length > 0) {
+      customMarkers.forEach((markerInfo) => {
+        if (markerInfo.lat && markerInfo.lng) {
+          const marker = L.marker([markerInfo.lat, markerInfo.lng], {
+            icon: customMarkerIcon,
+            customMarker: true, // Option to identify these markers
+          }).addTo(layerGroup);
+
+          marker.bindPopup(`
+            <div class="custom-marker-popup">
+              <h3>${markerInfo.name || "Custom Marker"}</h3>
+              <p>Lat: ${markerInfo.lat.toFixed(5)}, Lng: ${markerInfo.lng.toFixed(5)}</p>
+              ${
+                markerInfo.description
+                  ? `<p>${markerInfo.description}</p>`
+                  : ""
+              }
+            </div>
+          `);
+        }
+      });
+    }
+  }, [customMarkers]);
+
   // Update WMS layers
   useEffect(() => {
     if (!mapInstanceRef.current) return;
@@ -191,20 +264,25 @@ const MapContainer = ({
     const currentLayerInstances = layerInstancesRef.current;
     const allLayers = wmsService.getAllLayers();
 
-    allLayers.forEach(layerConfig => {
+    allLayers.forEach((layerConfig) => {
       const layerId = layerConfig.id;
       const isActive = activeLayers.has(layerId);
       const existingLayer = currentLayerInstances[layerId];
 
       if (isActive && !existingLayer) {
         // Add layer
-        const newLayer = L.tileLayer.wms(layerConfig.url, {
-          layers: layerConfig.layers,
-          format: layerConfig.format || 'image/png',
-          transparent: layerConfig.transparent !== undefined ? layerConfig.transparent : true,
-          attribution: layerConfig.attribution || '',
-          zIndex: layerConfig.zIndex || 10 // Ensure overlays are above base tiles
-        }).addTo(map);
+        const newLayer = L.tileLayer
+          .wms(layerConfig.url, {
+            layers: layerConfig.layers,
+            format: layerConfig.format || "image/png",
+            transparent:
+              layerConfig.transparent !== undefined
+                ? layerConfig.transparent
+                : true,
+            attribution: layerConfig.attribution || "",
+            zIndex: layerConfig.zIndex || 10, // Ensure overlays are above base tiles
+          })
+          .addTo(map);
         currentLayerInstances[layerId] = newLayer;
       } else if (!isActive && existingLayer) {
         // Remove layer
@@ -214,7 +292,6 @@ const MapContainer = ({
     });
     layerInstancesRef.current = currentLayerInstances;
   }, [activeLayers]);
-
 
   // Add map event listeners (example for location found by map.locate())
   useEffect(() => {
@@ -230,11 +307,11 @@ const MapContainer = ({
         });
       }
     };
-    map.on('locationfound', handleLocationFound);
+    map.on("locationfound", handleLocationFound);
     // Example: map.locate({ setView: true, maxZoom: 16 }); // To trigger location finding
 
     return () => {
-      map.off('locationfound', handleLocationFound);
+      map.off("locationfound", handleLocationFound);
     };
   }, [onLocationUpdate]);
 
@@ -249,7 +326,9 @@ const MapContainer = ({
       <div
         ref={mapRef}
         className="map-view"
-        style={{ width: '100%', height: '100%' }}
+        style={{ width: "100%", height: "100%" }}
+        aria-label="Interactive map"
+        role="application"
       />
     </div>
   );
