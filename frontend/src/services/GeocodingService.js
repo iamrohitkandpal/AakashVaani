@@ -78,8 +78,8 @@ class GeocodingService {
     try {
       let results;
       
-      if (this.useBackend) {
-        // Use backend proxy to respect API usage policies
+      if (navigator.onLine) {
+        // Online: Use backend proxy
         const response = await fetch(this.backendSearchEndpoint, {
           method: 'POST',
           headers: {
@@ -97,44 +97,47 @@ class GeocodingService {
         }
         
         results = await response.json();
+        
+        // Format and cache results
+        const formattedResults = this.formatResults(results);
+        this.addToCache(cacheKey, formattedResults);
+        
+        return formattedResults;
       } else {
-        // Direct API call (not recommended for production)
-        const params = new URLSearchParams({
-          ...this.defaultParams,
-          q: query,
-          limit: options.limit || this.defaultParams.limit
-        });
-        
-        if (options.countryCode) {
-          params.append('countrycodes', options.countryCode);
+        // Offline: Try to find in IndexedDB
+        try {
+          const offlineDb = await this.openOfflineDatabase();
+          const searches = await offlineDb.getAll('saved-searches');
+          
+          // Find similar searches
+          const matchingSearches = searches.filter(s => 
+            s.query && s.query.toLowerCase().includes(query.toLowerCase())
+          );
+          
+          if (matchingSearches.length > 0) {
+            // Use the most recent matching search
+            const mostRecent = matchingSearches.sort((a, b) => 
+              new Date(b.timestamp) - new Date(a.timestamp)
+            )[0];
+            
+            return mostRecent.results || [];
+          }
+          
+          // If no matches, return empty with offline indicator
+          return [{ 
+            id: 'offline-empty',
+            name: 'Offline search not available',
+            type: 'offline_error',
+            lat: 0,
+            lng: 0,
+            address: {},
+            isOfflineIndicator: true
+          }];
+        } catch (offlineError) {
+          console.error('Error accessing offline search data:', offlineError);
+          return [];
         }
-        
-        const response = await fetch(`${this.searchEndpoint}?${params}`, {
-          headers: this.headers
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Geocoding API error: ${response.status}`);
-        }
-        
-        results = await response.json();
       }
-      
-      // Format results
-      const formattedResults = results.map(item => ({
-        id: item.place_id || item.osm_id,
-        name: item.name || item.display_name,
-        type: item.type || 'place',
-        lat: parseFloat(item.lat),
-        lng: parseFloat(item.lon),
-        address: item.address || {},
-        raw: item
-      }));
-      
-      // Cache results
-      this.addToCache(cacheKey, formattedResults);
-      
-      return formattedResults;
     } catch (error) {
       console.error('Error during geocoding search:', error);
       return [];
@@ -269,6 +272,94 @@ class GeocodingService {
     } catch (error) {
       console.error('Error during smart search:', error);
       return [];
+    }
+  }
+
+  // Add methods for offline database access
+  async openOfflineDatabase() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('aakash-vaani-offline', 1);
+      
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        
+        if (!db.objectStoreNames.contains('saved-searches')) {
+          const store = db.createObjectStore('saved-searches', { keyPath: 'id' });
+          store.createIndex('query', 'query', { unique: false });
+          store.createIndex('timestamp', 'timestamp', { unique: false });
+        }
+      };
+      
+      request.onsuccess = () => {
+        const db = request.result;
+        
+        // Create a wrapper with Promise-based methods
+        const dbWrapper = {
+          get: (storeName, key) => {
+            return new Promise((resolve, reject) => {
+              const transaction = db.transaction(storeName, 'readonly');
+              const store = transaction.objectStore(storeName);
+              const getRequest = store.get(key);
+              
+              getRequest.onsuccess = () => resolve(getRequest.result);
+              getRequest.onerror = () => reject(getRequest.error);
+            });
+          },
+          getAll: (storeName) => {
+            return new Promise((resolve, reject) => {
+              const transaction = db.transaction(storeName, 'readonly');
+              const store = transaction.objectStore(storeName);
+              const getAllRequest = store.getAll();
+              
+              getAllRequest.onsuccess = () => resolve(getAllRequest.result);
+              getAllRequest.onerror = () => reject(getAllRequest.error);
+            });
+          },
+          put: (storeName, value) => {
+            return new Promise((resolve, reject) => {
+              const transaction = db.transaction(storeName, 'readwrite');
+              const store = transaction.objectStore(storeName);
+              const putRequest = store.put(value);
+              
+              putRequest.onsuccess = () => resolve(putRequest.result);
+              putRequest.onerror = () => reject(putRequest.error);
+            });
+          },
+          close: () => db.close()
+        };
+        
+        resolve(dbWrapper);
+      };
+      
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  // Method to save search results for offline use
+  async saveSearchForOffline(query, results) {
+    try {
+      const offlineDb = await this.openOfflineDatabase();
+      
+      const searchData = {
+        id: `search-${Date.now()}`,
+        query: query,
+        results: results,
+        timestamp: new Date().toISOString(),
+        synced: false
+      };
+      
+      await offlineDb.put('saved-searches', searchData);
+      
+      // Request background sync if available
+      if ('serviceWorker' in navigator && 'SyncManager' in window) {
+        const registration = await navigator.serviceWorker.ready;
+        await registration.sync.register('sync-saved-searches');
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Failed to save search for offline:', error);
+      return false;
     }
   }
 }

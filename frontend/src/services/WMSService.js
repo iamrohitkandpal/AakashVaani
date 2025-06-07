@@ -326,121 +326,100 @@ class WMSService {
     return this.layers.filter(layer => layer.overlay);
   }
 
-  // Enhanced layer detection with expanded synonyms and hierarchical matching
+  // Enhanced detectLayerFromCommand function for more accuracy
   detectLayerFromCommand(command) {
-    if (!command) return null;
-
+    if (!command || typeof command !== 'string') return null;
+    
     const commandLower = command.toLowerCase().trim();
+    console.log("Detecting layer from command:", commandLower);
     
-    // First try direct ID match
-    const directMatch = this.layers.find(layer => layer.id.toLowerCase() === commandLower);
-    if (directMatch) return directMatch.id;
-    
-    // Then try direct name match
-    const nameMatch = this.layers.find(layer => layer.name.toLowerCase() === commandLower);
-    if (nameMatch) return nameMatch.id;
-    
-    // Then try keyword matching (including starts with)
-    for (const layer of this.layers) {
-      if (layer.keywords && layer.keywords.length > 0) {
-        // Exact keyword match
-        const exactKeywordMatch = layer.keywords.find(keyword => 
-          keyword.toLowerCase() === commandLower
-        );
-        if (exactKeywordMatch) return layer.id;
-        
-        // Command contains keyword
-        const containsKeywordMatch = layer.keywords.find(keyword => 
-          commandLower.includes(keyword.toLowerCase())
-        );
-        if (containsKeywordMatch) return layer.id;
+    // Create scoring system to find best match
+    const scores = this.layers.map(layer => {
+      let score = 0;
+      
+      // Check exact ID match (highest priority)
+      if (layer.id.toLowerCase() === commandLower) {
+        score += 100;
       }
+      
+      // Check exact name match (very high priority)
+      if (layer.name && layer.name.toLowerCase() === commandLower) {
+        score += 90;
+      }
+      
+      // Check keywords exact match (high priority)
+      if (layer.keywords && Array.isArray(layer.keywords)) {
+        for (const keyword of layer.keywords) {
+          if (keyword.toLowerCase() === commandLower) {
+            score += 80;
+          }
+        }
+      }
+      
+      // Check category match (good priority)
+      if (layer.category && layer.category.toLowerCase() === commandLower) {
+        score += 70;
+      }
+      
+      // Check contains matches (medium priority)
+      if (layer.id.toLowerCase().includes(commandLower) || commandLower.includes(layer.id.toLowerCase())) {
+        score += 50;
+      }
+      
+      if (layer.name && (layer.name.toLowerCase().includes(commandLower) || commandLower.includes(layer.name.toLowerCase()))) {
+        score += 40;
+      }
+      
+      // Check keyword partial matches (lower priority)
+      if (layer.keywords && Array.isArray(layer.keywords)) {
+        for (const keyword of layer.keywords) {
+          if (keyword.toLowerCase().includes(commandLower) || commandLower.includes(keyword.toLowerCase())) {
+            score += 30;
+          }
+        }
+      }
+      
+      // Check common term mappings (lowest priority)
+      const commonTerms = {
+        'weather': ['precipitation', 'clouds', 'temperature', 'climate', 'rain', 'snow', 'wind'],
+        'traffic': ['transport', 'roads', 'cars', 'vehicles'],
+        'satellite': ['aerial', 'imagery', 'earth', 'from space'],
+        'terrain': ['elevation', 'topo', 'mountain', 'hill', 'topography'],
+        'street': ['osm', 'standard', 'road', 'map'],
+        'bike': ['cycle', 'bicycle', 'cycling'],
+      };
+      
+      // Check if command contains any common terms
+      for (const [term, mappedTerms] of Object.entries(commonTerms)) {
+        if (commandLower.includes(term)) {
+          // If the layer is related to any mapped terms, add score
+          if (mappedTerms.some(mappedTerm => 
+            layer.id.toLowerCase().includes(mappedTerm) || 
+            (layer.name && layer.name.toLowerCase().includes(mappedTerm))
+          )) {
+            score += 20;
+          }
+        }
+      }
+      
+      // Check disabled status - penalize disabled layers
+      if (layer.disabled) {
+        score -= 50;
+      }
+      
+      return { layer, score };
+    });
+    
+    // Sort by score and get the best match
+    scores.sort((a, b) => b.score - a.score);
+    
+    // Only consider matches with score > 0
+    if (scores.length > 0 && scores[0].score > 0) {
+      console.log('Best layer match:', scores[0].layer.id, 'with score', scores[0].score);
+      return scores[0].layer.id;
     }
     
-    // Try category-based matching
-    const categoryMatch = this.categories.find(category => 
-      category.name.toLowerCase() === commandLower || 
-      commandLower.includes(category.name.toLowerCase())
-    );
-    
-    if (categoryMatch) {
-      // Return the first layer in that category (preferring base layers)
-      const baseLayers = this.layers.filter(l => 
-        l.category === categoryMatch.id && l.isBase
-      );
-      if (baseLayers.length > 0) return baseLayers[0].id;
-      
-      const anyLayers = this.layers.filter(l => l.category === categoryMatch.id);
-      if (anyLayers.length > 0) return anyLayers[0].id;
-    }
-    
-    // Extended synonym mapping for common terms
-    const synonymMap = {
-      "aerial": "esriSatellite",
-      "satellite": "esriSatellite",
-      "imagery": "esriSatellite",
-      "photo": "esriSatellite",
-      
-      "dark": "cartoDbDark",
-      "night": "cartoDbDark",
-      
-      "standard": "osmStandard",
-      "basic": "osmStandard",
-      "default": "osmStandard",
-      
-      "cycle": "cycleOsm",
-      "bike": "cycleOsm",
-      "cycling": "cycleOsm",
-      
-      "train": "openRailwayMap",
-      "railway": "openRailwayMap",
-      "rail": "openRailwayMap",
-      
-      "sea": "openSeaMap",
-      "ocean": "openSeaMap",
-      "nautical": "openSeaMap",
-      
-      "hiking": "thunderforestOutdoors",
-      "outdoor": "thunderforestOutdoors",
-      "outdoors": "thunderforestOutdoors",
-      
-      "transportation": "thunderforestTransport",
-      "transit": "openPtMap",
-      "bus": "openPtMap",
-      "public transport": "openPtMap",
-      
-      "terrain": "stamenTerrain",
-      "topography": "stamenTerrain",
-      "elevation": "stamenTerrain",
-      
-      "rain": "openWeatherPrecipitation",
-      "precipitation": "openWeatherPrecipitation",
-      
-      "cloud": "openWeatherClouds",
-      "clouds": "openWeatherClouds",
-      
-      "temperature": "openWeatherTemp",
-      "heat": "openWeatherTemp",
-      
-      "topo": "openTopoMap",
-      "topographic": "openTopoMap",
-      
-      "road": "osmStandard",
-      "streets": "osmStandard",
-      "highways": "osmStandard",
-      
-      "humanitarian": "osmHumanitarian",
-      "crisis": "osmHumanitarian",
-      
-      "india": "bhuvanHybrid",
-      "bhuvan": "bhuvanHybrid",
-    };
-
-    if (synonymMap[commandLower]) {
-      return synonymMap[commandLower];
-    }
-    
-    // No match found
+    console.log("No layer match found for:", commandLower);
     return null;
   }
   
@@ -449,132 +428,151 @@ class WMSService {
   // Convert GeoJSON to Leaflet layer
   createGeoJsonLayer(geoJson, options = {}) {
     if (!geoJson) return null;
-    if (typeof L === 'undefined') {
-      console.error('Leaflet is not available. Make sure it is properly loaded.');
-      return null;
-    }
     
-    const defaultStyle = {
-      color: '#3388ff',
-      weight: 3,
-      opacity: 0.7,
-      fillOpacity: 0.2,
-      fillColor: '#3388ff'
-    };
-    
-    // Handler for each feature to add popups and tooltips
-    const defaultEachFeature = (feature, layer) => {
-      if (feature.properties) {
-        const props = feature.properties;
-        let popupContent = '<div class="geojson-popup">';
-        
-        // Add title if available
-        if (props.name || props.title) {
-          popupContent += `<h3>${props.name || props.title}</h3>`;
-        }
-        
-        // Add description if available
-        if (props.description) {
-          popupContent += `<p>${props.description}</p>`;
-        }
-        
-        // Add table of other properties
-        popupContent += '<table class="geojson-props">';
-        for (const [key, value] of Object.entries(props)) {
-          if (!['name', 'title', 'description'].includes(key) && value !== null) {
-            popupContent += `<tr><th>${key}</th><td>${value}</td></tr>`;
+    try {
+      // Ensure Leaflet is loaded
+      if (typeof L === 'undefined') {
+        console.error('Leaflet is not available. Make sure it is properly loaded.');
+        return null;
+      }
+      
+      // Default style for GeoJSON features
+      const defaultStyle = {
+        color: '#3388ff',
+        weight: 3,
+        opacity: 0.7,
+        fillOpacity: 0.2,
+        fillColor: '#3388ff'
+      };
+      
+      // Handler for feature popups and tooltips
+      const defaultEachFeature = (feature, layer) => {
+        if (feature.properties) {
+          // Create popup content from properties
+          const props = feature.properties;
+          let popupContent = '<div class="geojson-popup">';
+          
+          // Add title if available
+          if (props.name || props.title) {
+            popupContent += `<h3>${props.name || props.title}</h3>`;
+          }
+          
+          // Add description if available
+          if (props.description) {
+            popupContent += `<p>${props.description}</p>`;
+          }
+          
+          // Add table of other properties
+          popupContent += '<table class="geojson-props">';
+          for (const [key, value] of Object.entries(props)) {
+            if (!['name', 'title', 'description'].includes(key) && value !== null) {
+              popupContent += `<tr><th>${key}</th><td>${value}</td></tr>`;
+            }
+          }
+          popupContent += '</table></div>';
+          
+          layer.bindPopup(popupContent);
+          
+          // Add tooltip if there's a name
+          if (props.name || props.title) {
+            layer.bindTooltip(props.name || props.title);
           }
         }
-        popupContent += '</table></div>';
-        
-        layer.bindPopup(popupContent);
-        
-        // Add tooltip if there's a name
-        if (props.name || props.title) {
-          layer.bindTooltip(props.name || props.title);
-        }
-      }
-    };
-    
-    // Handler for point features - creates custom markers
-    const defaultPointToLayer = (feature, latlng) => {
-      const icon = options.pointIcon || new L.Icon.Default();
-      return L.marker(latlng, { icon });
-    };
-    
-    const layerOptions = {
-      style: options.style || defaultStyle,
-      onEachFeature: options.onEachFeature || defaultEachFeature,
-      pointToLayer: options.pointToLayer || defaultPointToLayer
-    };
-    
-    return L.geoJSON(geoJson, layerOptions);
+      };
+      
+      // Custom marker for point features
+      const defaultPointToLayer = (feature, latlng) => {
+        // Use custom icon if provided, otherwise default
+        const icon = options.pointIcon || new L.Icon.Default();
+        return L.marker(latlng, { icon });
+      };
+      
+      // Merge default options with provided options
+      const layerOptions = {
+        style: options.style || defaultStyle,
+        onEachFeature: options.onEachFeature || defaultEachFeature,
+        pointToLayer: options.pointToLayer || defaultPointToLayer
+      };
+      
+      // Create and return the GeoJSON layer
+      return L.geoJSON(geoJson, layerOptions);
+    } catch (error) {
+      console.error('Error creating GeoJSON layer:', error);
+      return null;
+    }
   }
   
-  // Create a heatmap from point data
+  // Create heatmap layer from points
   createHeatmapLayer(points, options = {}) {
     if (!points || !Array.isArray(points) || points.length === 0) {
       console.error('Invalid points data for heatmap');
       return null;
     }
     
-    if (typeof L === 'undefined' || typeof L.heatLayer === 'undefined') {
-      console.error('Leaflet or Leaflet.heat not available. Add <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>');
-      
-      // Create a placeholder layer and return a warning
-      const placeholderLayer = L.layerGroup();
-      placeholderLayer.addLayer(
-        L.marker([0, 0])
-          .bindPopup('Heatmap plugin not loaded. Please add Leaflet.heat to your project.')
-      );
-      return placeholderLayer;
-    }
-    
-    // Format points into the expected [lat, lng, intensity] format
-    const heatPoints = points.map(p => {
-      // If already in [lat, lng, intensity] format
-      if (Array.isArray(p) && p.length >= 2) {
-        return p;
-      }
-      
-      // If in {lat, lng, value} format
-      if (p && typeof p === 'object') {
-        const lat = p.lat || p.latitude;
-        const lng = p.lng || p.longitude || p.lon;
-        const intensity = p.intensity || p.value || p.weight || 1;
+    try {
+      // Check if Leaflet and Leaflet.heat plugin are loaded
+      if (typeof L === 'undefined' || typeof L.heatLayer === 'undefined') {
+        console.error('Leaflet or Leaflet.heat not available.');
         
-        if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
-          return [lat, lng, intensity];
-        }
+        // Return a placeholder layer
+        const placeholderLayer = L.layerGroup();
+        placeholderLayer.addLayer(
+          L.marker([0, 0])
+            .bindPopup('Heatmap plugin not loaded. Please add Leaflet.heat to your project.')
+        );
+        return placeholderLayer;
       }
       
-      return null;
-    }).filter(p => p !== null);
-    
-    if (heatPoints.length === 0) {
-      console.warn('No valid points found for heatmap after filtering');
-      return L.layerGroup(); // Return empty layer group
-    }
-    
-    const defaultOptions = {
-      radius: 25,        // Size of each point in the heatmap
-      blur: 15,          // Amount of blur
-      maxZoom: 17,       // Don't show points beyond this zoom level
-      max: 1.0,          // Maximum intensity
-      gradient: {        // Color gradient
-        0.4: 'blue',
-        0.6: 'cyan',
-        0.7: 'lime',
-        0.8: 'yellow',
-        1.0: 'red'
+      // Format the points into expected [lat, lng, intensity] format
+      const heatPoints = points.map(p => {
+        // If already in [lat, lng, intensity] format
+        if (Array.isArray(p) && p.length >= 2) {
+          return p;
+        }
+        
+        // If in {lat, lng, value} format
+        if (p && typeof p === 'object') {
+          const lat = p.lat || p.latitude;
+          const lng = p.lng || p.longitude || p.lon;
+          const intensity = p.intensity || p.value || p.weight || 1;
+          
+          if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
+            return [lat, lng, intensity];
+          }
+        }
+        
+        return null;
+      }).filter(p => p !== null);
+      
+      if (heatPoints.length === 0) {
+        console.warn('No valid points found for heatmap after filtering');
+        return L.layerGroup(); // Return empty layer group
       }
-    };
-    
-    // Merge default options with provided options
-    const heatOptions = {...defaultOptions, ...options};
-    
-    // Create and return the heatmap layer
-    return L.heatLayer(heatPoints, heatOptions);
+      
+      // Default options for the heatmap
+      const defaultOptions = {
+        radius: 25,        // Size of each point
+        blur: 15,          // Amount of blur
+        maxZoom: 17,       // Don't show points beyond this zoom level
+        max: 1.0,          // Maximum intensity
+        gradient: {        // Color gradient
+          0.4: 'blue',
+          0.6: 'cyan',
+          0.7: 'lime',
+          0.8: 'yellow',
+          1.0: 'red'
+        }
+      };
+      
+      // Merge default options with provided options
+      const heatOptions = {...defaultOptions, ...options};
+      
+      // Create and return the heatmap layer
+      return L.heatLayer(heatPoints, heatOptions);
+    } catch (error) {
+      console.error('Error creating heatmap layer:', error);
+      return L.layerGroup(); // Return empty layer group on error
+    }
   }
 }
 
