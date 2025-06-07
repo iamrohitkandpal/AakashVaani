@@ -32,21 +32,6 @@ class ModelDownloader {
           options: { threshold: 0.9 },
         },
       },
-      {
-        id: "posenet",
-        url: "https://storage.googleapis.com/tfjs-models/savedmodel/posenet/mobilenet/float/050/model-stride16.json",
-        size: 13000000, // approx size in bytes
-        description: "Pose estimation for gesture control",
-        importInfo: {
-          package: "@tensorflow-models/posenet",
-          className: "load",
-          options: {
-            architecture: "MobileNetV1",
-            outputStride: 16,
-            multiplier: 0.75,
-          },
-        },
-      },
     ];
 
     // Initialize TensorFlow.js backend
@@ -279,15 +264,6 @@ class ModelDownloader {
             break;
           }
 
-          case "posenet": {
-            // PoseNet model takes configuration options
-            const options = model.importInfo.options || {};
-            modelInstance = await modelModule[model.importInfo.className](
-              options
-            );
-            break;
-          }
-
           default:
             throw new Error(`Unsupported model type: ${modelId}`);
         }
@@ -369,8 +345,6 @@ class ModelDownloader {
           return await import('@tensorflow-models/speech-commands');
         case '@tensorflow-models/toxicity':
           return await import('@tensorflow-models/toxicity');
-        case '@tensorflow-models/posenet':
-          return await import('@tensorflow-models/posenet');
         default:
           console.error(`Unknown package: ${packageName}`);
           return null;
@@ -530,20 +504,6 @@ class ModelDownloader {
             break;
           }
 
-          case "posenet": {
-            // Try loading from IndexedDB first
-            try {
-              modelInstance = await tf.loadGraphModel(modelPath);
-            } catch (e) {
-              // Fall back to creating a new instance
-              const options = model.importInfo.options || {};
-              modelInstance = await modelModule[model.importInfo.className](
-                options
-              );
-            }
-            break;
-          }
-
           default:
             throw new Error(`Unsupported model type: ${modelId}`);
         }
@@ -561,8 +521,6 @@ class ModelDownloader {
                   return await modelInstance.recognize(input);
                 case "toxicity":
                   return await modelInstance.classify(input);
-                case "posenet":
-                  return await modelInstance.estimatePoses(input);
                 default:
                   throw new Error(
                     `Prediction not implemented for model ${modelId}`
