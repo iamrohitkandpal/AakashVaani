@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { modelDownloader } from '../utils/modelDownloader';
+import { modelDownloader } from "../utils/modelDownloader";
 
 class VoiceRecognitionEngine {
   constructor(options = {}) {
@@ -44,13 +44,17 @@ class VoiceRecognitionEngine {
 
   // Web Speech API initialization
   initializeWebSpeech() {
-    if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
+    if (
+      !("webkitSpeechRecognition" in window) &&
+      !("SpeechRecognition" in window)
+    ) {
       console.error("Speech recognition not supported in this browser");
       this.onError(new Error("Web Speech API not supported"));
       return false;
     }
     try {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const SpeechRecognition =
+        window.SpeechRecognition || window.webkitSpeechRecognition;
       this.recognition = new SpeechRecognition();
       this.recognition.lang = this.language;
       this.recognition.continuous = this.continuous;
@@ -103,6 +107,7 @@ class VoiceRecognitionEngine {
     this.onStart();
   }
 
+  // Fix handleResult method in VoiceRecognitionEngine
   handleResult(event) {
     let interimTranscript = "";
     let finalTranscriptSegment = "";
@@ -124,14 +129,26 @@ class VoiceRecognitionEngine {
       const currentFullCommand = this.currentCommandParts.join(" ");
       this.onResult(currentFullCommand, true);
 
+      // Immediate command processing for better responsiveness
+      const fullCommandToProcess = this.currentCommandParts.join(" ").trim();
+      if (fullCommandToProcess) {
+        const commandObject = this.processCommand(fullCommandToProcess);
+        console.log("Processed command:", commandObject); // Add logging
+        this.onCommand(commandObject);
+        this.currentCommandParts = []; // Clear for next command
+      }
+
+      // Still keep timer for commands that might need more segments
       clearTimeout(this.speechTimeout);
       this.speechTimeout = setTimeout(() => {
-        const fullCommandToProcess = this.currentCommandParts.join(" ").trim();
-        if (fullCommandToProcess) {
-          const commandObject = this.processCommand(fullCommandToProcess);
+        // If there are somehow still parts left (should be rare with immediate processing)
+        const remainingCommand = this.currentCommandParts.join(" ").trim();
+        if (remainingCommand) {
+          const commandObject = this.processCommand(remainingCommand);
           this.onCommand(commandObject);
+          this.currentCommandParts = [];
         }
-        this.currentCommandParts = [];
+
         if (!this.continuous && this.isListening) {
           this.stop();
         }
@@ -161,31 +178,31 @@ class VoiceRecognitionEngine {
 
     try {
       // Import the speech commands package
-      const speechCommands = await import('@tensorflow-models/speech-commands');
-      
+      const speechCommands = await import("@tensorflow-models/speech-commands");
+
       // Create the recognizer
       this.tfRecognizer = speechCommands.create(
-        'BROWSER_FFT', // Using browser's native FFT
+        "BROWSER_FFT", // Using browser's native FFT
         undefined, // No custom vocabulary
         undefined, // Use default model URL
         undefined // Use default metadata URL
       );
-      
+
       // Load the model
       await this.tfRecognizer.ensureModelLoaded();
-      
+
       // Get vocabulary from the model
       this.tfVocabulary = this.tfRecognizer.wordLabels();
-      
-      console.log('TensorFlow.js speech model loaded successfully');
-      console.log('Available commands:', this.tfVocabulary);
-      
+
+      console.log("TensorFlow.js speech model loaded successfully");
+      console.log("Available commands:", this.tfVocabulary);
+
       return true;
     } catch (error) {
-      console.error('Error loading TensorFlow.js speech model:', error);
+      console.error("Error loading TensorFlow.js speech model:", error);
       this.onError({
-        error: 'tf_model_load_failed',
-        message: `Failed to load TensorFlow.js speech model: ${error.message}`
+        error: "tf_model_load_failed",
+        message: `Failed to load TensorFlow.js speech model: ${error.message}`,
       });
       return false;
     }
@@ -196,15 +213,15 @@ class VoiceRecognitionEngine {
       const loaded = await this.loadTfModel();
       if (!loaded) return false;
     }
-    
+
     if (this.tfIsListening) return true; // Already listening
-    
+
     try {
       this.tfIsListening = true;
       this.onStart();
-      
+
       const suppressionTimeMs = 1000;
-      
+
       // Start listening with callbacks
       await this.tfRecognizer.listen(
         async (result) => {
@@ -213,15 +230,15 @@ class VoiceRecognitionEngine {
           const wordIndices = scores
             .map((s, i) => ({ score: s, index: i }))
             .sort((a, b) => b.score - a.score);
-          
+
           // Get the top result above threshold
           const topWordIndex = wordIndices[0];
           if (topWordIndex.score > this.tfConfidenceThreshold) {
             const recognizedWord = this.tfVocabulary[topWordIndex.index];
-            
+
             // Process the recognized word
             this.onTfResult(recognizedWord, topWordIndex.score);
-            
+
             // Convert to a command if possible
             const command = this.processTfCommand(recognizedWord);
             if (command) {
@@ -234,18 +251,18 @@ class VoiceRecognitionEngine {
           probabilityThreshold: 0.75, // Only trigger for high-probability matches
           invokeCallbackOnNoiseAndUnknown: false, // Don't invoke for noise or unknown
           overlapFactor: 0.5, // Overlap between frames
-          suppressionTimeMillis: suppressionTimeMs // Minimum time between triggers
+          suppressionTimeMillis: suppressionTimeMs, // Minimum time between triggers
         }
       );
-      
-      console.log('TensorFlow.js speech recognition started');
+
+      console.log("TensorFlow.js speech recognition started");
       return true;
     } catch (error) {
-      console.error('Error starting TensorFlow.js speech recognition:', error);
+      console.error("Error starting TensorFlow.js speech recognition:", error);
       this.tfIsListening = false;
       this.onError({
-        error: 'tf_listen_failed',
-        message: `Failed to start TensorFlow.js speech recognition: ${error.message}`
+        error: "tf_listen_failed",
+        message: `Failed to start TensorFlow.js speech recognition: ${error.message}`,
       });
       return false;
     }
@@ -263,44 +280,52 @@ class VoiceRecognitionEngine {
   }
 
   processCommand(command) {
-    const searchPattern = /^(search|find|show me|look for|locate|where is|what is near|nearby)\s+(.+)$/i;
-    const navigatePattern = /^(navigate|take me|go|directions|route|how do I get)\s+(?:to|towards|toward)\s+(.+)$/i;
+    const searchPattern =
+      /^(search|find|show me|look for|locate|where is|what is near|nearby)\s+(.+)$/i;
+    const navigatePattern =
+      /^(navigate|take me|go|directions|route|how do I get)\s+(?:to|towards|toward)\s+(.+)$/i;
     const layerPattern = /^(show|hide|toggle)\s+(.+?)(?:\s+layer|\s+map)?$/i;
-    const zoomPattern = /^(?:zoom\s+(in|out)|set zoom(?:\s+level)?\s+(?:to\s+)?(\d+))$/i;
+    const zoomPattern =
+      /^(?:zoom\s+(in|out)|set zoom(?:\s+level)?\s+(?:to\s+)?(\d+))$/i;
     const resetPattern = /^(reset|clear)\s+(?:map|view|everything)$/i;
     const helpPattern = /^(help|commands|what can I say|what can I do)$/i;
     const locationPattern = /^(where am i|my location|current location)$/i;
     const panPattern = /^(pan|move|scroll)\s+(left|right|up|down)$/i;
-    const addMarkerPattern = /^(add marker|drop pin|place marker)(?:\s+(?:at|near)\s+(.+))?$/i;
+    const addMarkerPattern =
+      /^(add marker|drop pin|place marker)(?:\s+(?:at|near)\s+(.+))?$/i;
 
     let match;
-    if (match = command.match(addMarkerPattern)) {
-      return { type: "add_marker", locationQuery: match[2] ? match[2].trim() : null, rawCommand: command };
-    } else if (match = command.match(searchPattern)) {
+    if ((match = command.match(addMarkerPattern))) {
+      return {
+        type: "add_marker",
+        locationQuery: match[2] ? match[2].trim() : null,
+        rawCommand: command,
+      };
+    } else if ((match = command.match(searchPattern))) {
       return { type: "search", query: match[2], rawCommand: command };
-    } else if (match = command.match(navigatePattern)) {
+    } else if ((match = command.match(navigatePattern))) {
       return { type: "navigate", destination: match[2], rawCommand: command };
-    } else if (match = command.match(layerPattern)) {
+    } else if ((match = command.match(layerPattern))) {
       return {
         type: "layer",
         action: match[1].toLowerCase(),
         layer: match[2].toLowerCase().trim(),
         rawCommand: command,
       };
-    } else if (match = command.match(zoomPattern)) {
+    } else if ((match = command.match(zoomPattern))) {
       return {
         type: "zoom",
         action: match[1] ? match[1].toLowerCase() : null,
         level: match[2] ? parseInt(match[2], 10) : null,
         rawCommand: command,
       };
-    } else if (match = command.match(resetPattern)) {
+    } else if ((match = command.match(resetPattern))) {
       return { type: "reset", rawCommand: command };
-    } else if (match = command.match(helpPattern)) {
+    } else if ((match = command.match(helpPattern))) {
       return { type: "help", rawCommand: command };
-    } else if (match = command.match(locationPattern)) {
+    } else if ((match = command.match(locationPattern))) {
       return { type: "location_query", rawCommand: command };
-    } else if (match = command.match(panPattern)) {
+    } else if ((match = command.match(panPattern))) {
       return {
         type: "pan",
         direction: match[2].toLowerCase(),
@@ -314,14 +339,26 @@ class VoiceRecognitionEngine {
     // Map TensorFlow.js speech command vocabulary to app commands
     const command = word.toLowerCase();
     switch (command) {
-      case "up": return { type: "pan", direction: "up", rawCommand: `tf: ${word}` };
-      case "down": return { type: "pan", direction: "down", rawCommand: `tf: ${word}` };
-      case "left": return { type: "pan", direction: "left", rawCommand: `tf: ${word}` };
-      case "right": return { type: "pan", direction: "right", rawCommand: `tf: ${word}` };
-      case "go": return { type: "zoom", action: "in", rawCommand: `tf: ${word}` };
-      case "stop": return { type: "zoom", action: "out", rawCommand: `tf: ${word}` };
-      case "yes": return { type: "add_marker", locationQuery: null, rawCommand: `tf: ${word}` };
-      default: return { type: "unknown_tf", rawCommand: `tf: ${word}` };
+      case "up":
+        return { type: "pan", direction: "up", rawCommand: `tf: ${word}` };
+      case "down":
+        return { type: "pan", direction: "down", rawCommand: `tf: ${word}` };
+      case "left":
+        return { type: "pan", direction: "left", rawCommand: `tf: ${word}` };
+      case "right":
+        return { type: "pan", direction: "right", rawCommand: `tf: ${word}` };
+      case "go":
+        return { type: "zoom", action: "in", rawCommand: `tf: ${word}` };
+      case "stop":
+        return { type: "zoom", action: "out", rawCommand: `tf: ${word}` };
+      case "yes":
+        return {
+          type: "add_marker",
+          locationQuery: null,
+          rawCommand: `tf: ${word}`,
+        };
+      default:
+        return { type: "unknown_tf", rawCommand: `tf: ${word}` };
     }
   }
 }
@@ -344,7 +381,9 @@ const VoiceNavigator = ({ onVoiceCommand, onStatusChange }) => {
         setIsMicAvailable(true);
       } catch (error) {
         console.error("Microphone permission denied:", error);
-        setErrorMessage("Microphone access denied. Please enable it in browser settings.");
+        setErrorMessage(
+          "Microphone access denied. Please enable it in browser settings."
+        );
         setIsMicAvailable(false);
       }
     };
@@ -387,37 +426,58 @@ const VoiceNavigator = ({ onVoiceCommand, onStatusChange }) => {
       onError: (eventOrError) => {
         setIsListeningState(false);
         if (onStatusChange) onStatusChange("error");
-        let msg = eventOrError.message || `Error: ${eventOrError.error || "Unknown error"}`;
+        let msg =
+          eventOrError.message ||
+          `Error: ${eventOrError.error || "Unknown error"}`;
         if (eventOrError.error) {
           switch (eventOrError.error) {
-            case "no-speech": msg = "No speech detected."; break;
-            case "aborted": msg = "Listening aborted."; break;
-            case "audio-capture": msg = "Microphone problem."; break;
-            case "network": msg = "Network error for Web Speech."; break;
-            case "not-allowed": msg = "Microphone permission denied."; break;
-            case "service-not-allowed": msg = "Speech recognition service denied."; break;
-            default: break;
+            case "no-speech":
+              msg = "No speech detected.";
+              break;
+            case "aborted":
+              msg = "Listening aborted.";
+              break;
+            case "audio-capture":
+              msg = "Microphone problem.";
+              break;
+            case "network":
+              msg = "Network error for Web Speech.";
+              break;
+            case "not-allowed":
+              msg = "Microphone permission denied.";
+              break;
+            case "service-not-allowed":
+              msg = "Speech recognition service denied.";
+              break;
+            default:
+              break;
           }
         }
-        if (eventOrError.error !== "aborted" || (engineRef.current && (engineRef.current.isListening || engineRef.current.tfIsListening))) {
+        if (
+          eventOrError.error !== "aborted" ||
+          (engineRef.current &&
+            (engineRef.current.isListening || engineRef.current.tfIsListening))
+        ) {
           setErrorMessage(msg);
         }
-        setTimeout(() => { if (onStatusChange) onStatusChange("idle"); }, 3000);
+        setTimeout(() => {
+          if (onStatusChange) onStatusChange("idle");
+        }, 3000);
       },
       // TFJS specific callback
       onTfResult: (word, score) => {
-        if (word && word !== '_background_noise_' && word !== '_unknown_') {
+        if (word && word !== "_background_noise_" && word !== "_unknown_") {
           setTfLastWord(`TF: ${word} (${score.toFixed(2)})`);
-        } else if (word === '_background_noise_') {
+        } else if (word === "_background_noise_") {
           setTfLastWord("TF: (Background noise)");
         }
-      }
+      },
     });
-    
+
     // Optionally preload the TFJS model
     if (useTfRecognizer && engineRef.current) {
-      engineRef.current.loadTfModel().then(loaded => {
-        if(loaded) console.log("TFJS Model preloaded by VoiceNavigator");
+      engineRef.current.loadTfModel().then((loaded) => {
+        if (loaded) console.log("TFJS Model preloaded by VoiceNavigator");
       });
     }
 
@@ -436,14 +496,16 @@ const VoiceNavigator = ({ onVoiceCommand, onStatusChange }) => {
       if (engineRef.current.tfIsListening) {
         engineRef.current.stopTfListening();
       } else {
-        if(engineRef.current.isListening) engineRef.current.stop();
+        if (engineRef.current.isListening) engineRef.current.stop();
         engineRef.current.startTfListening();
       }
-    } else { // Web Speech API
+    } else {
+      // Web Speech API
       if (engineRef.current.isListening) {
         engineRef.current.stop();
       } else {
-        if(engineRef.current.tfIsListening) engineRef.current.stopTfListening();
+        if (engineRef.current.tfIsListening)
+          engineRef.current.stopTfListening();
         engineRef.current.start();
       }
     }
@@ -453,17 +515,24 @@ const VoiceNavigator = ({ onVoiceCommand, onStatusChange }) => {
   const handleManualCommandSubmit = (e) => {
     e.preventDefault();
     if (manualCommand.trim() && engineRef.current && onVoiceCommand) {
-      if (onStatusChange) onStatusChange('processing');
+      if (onStatusChange) onStatusChange("processing");
+
+      // Create command object with proper timestamp
       const commandObj = engineRef.current.processCommand(manualCommand.trim());
-      // Add timestamp to manually created commands
       commandObj.timestamp = new Date().toISOString();
+      commandObj.isManual = true; // Flag to indicate this was manually entered
+
+      console.log("Manual command processed:", commandObj);
       onVoiceCommand(commandObj);
-      setManualCommand('');
-      // Provide visual feedback
-      setInterimTranscript('Processing: ' + manualCommand);
+
+      // Clear the input and show feedback
+      setManualCommand("");
+      setInterimTranscript(`Command processed: ${manualCommand}`);
+
+      // Clear feedback after a delay
       setTimeout(() => {
-        setInterimTranscript('');
-        if (onStatusChange) onStatusChange('idle');
+        setInterimTranscript("");
+        if (onStatusChange) onStatusChange("idle");
       }, 1500);
     }
   };
@@ -472,24 +541,38 @@ const VoiceNavigator = ({ onVoiceCommand, onStatusChange }) => {
     <div className="voice-navigator">
       <div className="voice-control-panel">
         <button
-          className={`mic-button ${isListeningState ? "active" : ""} ${!isMicAvailable ? "disabled" : ""}`}
+          className={`mic-button ${isListeningState ? "active" : ""} ${
+            !isMicAvailable ? "disabled" : ""
+          }`}
           onClick={toggleListening}
           disabled={!isMicAvailable}
-          aria-label={isMicAvailable ? (isListeningState ? "Stop listening" : "Start voice control") : "Microphone not available"}
-          title={isMicAvailable ? (isListeningState ? "Stop listening" : "Start voice control") : "Microphone not available"}
+          aria-label={
+            isMicAvailable
+              ? isListeningState
+                ? "Stop listening"
+                : "Start voice control"
+              : "Microphone not available"
+          }
+          title={
+            isMicAvailable
+              ? isListeningState
+                ? "Stop listening"
+                : "Start voice control"
+              : "Microphone not available"
+          }
         >
           <span className="mic-icon">{isListeningState ? "🎤" : "🎙️"}</span>
           <span className="mic-text">
-            {isListeningState 
-              ? "Listening..." 
-              : isMicAvailable 
-                ? "Start Voice Control" 
-                : "Mic Unavailable"}
+            {isListeningState
+              ? "Listening..."
+              : isMicAvailable
+              ? "Start Voice Control"
+              : "Mic Unavailable"}
           </span>
         </button>
-        
-        <button 
-          onClick={() => setUseTfRecognizer(prev => !prev)} 
+
+        <button
+          onClick={() => setUseTfRecognizer((prev) => !prev)}
           title="Toggle recognizer mode"
           aria-label="Toggle between browser speech recognition and TensorFlow.js on-device recognition"
           className="recognizer-toggle-button"
@@ -516,7 +599,9 @@ const VoiceNavigator = ({ onVoiceCommand, onStatusChange }) => {
             title="Send command"
             aria-label="Submit command"
           >
-            <span role="img" aria-hidden="true">➤</span>
+            <span role="img" aria-hidden="true">
+              ➤
+            </span>
           </button>
         </form>
 
@@ -536,7 +621,10 @@ const VoiceNavigator = ({ onVoiceCommand, onStatusChange }) => {
           </div>
         )}
         <div className="voice-instructions">
-          <p>Say "help" for available commands. {useTfRecognizer ? "(TFJS Active)" : "(WebSpeech Active)"}</p>
+          <p>
+            Say "help" for available commands.{" "}
+            {useTfRecognizer ? "(TFJS Active)" : "(WebSpeech Active)"}
+          </p>
         </div>
       </div>
     </div>

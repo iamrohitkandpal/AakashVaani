@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { wmsService } from "../services/WMSService";
+import OfflineMapTools from "./OfflineMapTools"; // Import OfflineMapTools
 
 // Fix for default markers in React Leaflet
 delete L.Icon.Default.prototype._getIconUrl;
@@ -63,6 +64,7 @@ const MapContainer = ({
   center,
   zoom,
   isLoading,
+  isOnline, // Add this prop
 }) => {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
@@ -73,48 +75,113 @@ const MapContainer = ({
   // Initialize map instance
   useEffect(() => {
     if (mapRef.current && !mapInstanceRef.current) {
-      const initialMapCenter = center || DEFAULT_CENTER;
-      const initialMapZoom = typeof zoom === "number" ? zoom : DEFAULT_ZOOM;
+      try {
+        // Ensure we have valid initial values
+        const initialMapCenter =
+          center &&
+          typeof center.lat === "number" &&
+          !isNaN(center.lat) &&
+          typeof center.lng === "number" &&
+          !isNaN(center.lng)
+            ? [center.lat, center.lng]
+            : DEFAULT_CENTER;
 
-      const map = L.map(mapRef.current, {
-        // prefer passing options here rather than chaining setView immediately
-        center: initialMapCenter,
-        zoom: initialMapZoom,
-      });
+        const initialMapZoom =
+          typeof zoom === "number" && !isNaN(zoom) ? zoom : DEFAULT_ZOOM;
 
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        maxZoom: 19,
-        minZoom: 3,
-      }).addTo(map);
+        console.log("Initializing map with:", {
+          initialMapCenter,
+          initialMapZoom,
+        });
 
-      mapInstanceRef.current = map;
-      markersLayerRef.current = L.layerGroup().addTo(map);
-      customMarkersLayerRef.current = L.layerGroup().addTo(map); // Initialize custom markers layer
+        const map = L.map(mapRef.current, {
+          center: initialMapCenter,
+          zoom: initialMapZoom,
+        });
 
-      if (onMapReady) {
-        onMapReady(map);
+        // Add event listeners for error handling
+        map.on("error", (event) => {
+          console.error("Leaflet map error:", event.error);
+        });
+
+        // Base layer - always add one base layer for the map to work
+        const baseLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+          maxZoom: 19,
+          minZoom: 3,
+        });
+
+        // Handle network errors on the base layer
+        baseLayer.on("tileerror", function (error) {
+          console.warn("Base layer tile error:", error);
+          // If offline, try to use cached tiles from service worker
+        });
+
+        baseLayer.addTo(map);
+
+        // Initialize layer groups
+        markersLayerRef.current = L.layerGroup().addTo(map);
+        customMarkersLayerRef.current = L.layerGroup().addTo(map);
+
+        if (onMapReady) {
+          onMapReady(map);
+        }
+
+        mapInstanceRef.current = map;
+
+        // Store the base layer so we don't remove it later
+        layerInstancesRef.current["baseOsm"] = baseLayer;
+
+        // Emit ready event for other components
+        const event = new CustomEvent("mapready", { detail: { map } });
+        document.dispatchEvent(event);
+      } catch (error) {
+        console.error("Error initializing map:", error);
+        // Show user-friendly error
+        if (mapRef.current) {
+          mapRef.current.innerHTML = `
+          <div class="map-error">
+            <p>Error loading map. Please try again.</p>
+            <button onclick="window.location.reload()">Reload</button>
+          </div>
+        `;
+        }
       }
     }
 
-    // Cleanup function to destroy map instance when component unmounts
+    // Cleanup function when component unmounts
     return () => {
       if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
+        try {
+          mapInstanceRef.current.off();
+          mapInstanceRef.current.remove();
+        } catch (error) {
+          console.error("Error cleaning up map:", error);
+        }
         mapInstanceRef.current = null;
       }
+
+      // Clean up other references
       if (markersLayerRef.current) {
-        markersLayerRef.current.remove();
-        markersLayerRef.current = null;
+        try {
+          markersLayerRef.current.clearLayers();
+        } catch (e) {
+          console.error("Error clearing markers layer:", e);
+        }
       }
+
       if (customMarkersLayerRef.current) {
-        customMarkersLayerRef.current.remove();
-        customMarkersLayerRef.current = null;
+        try {
+          customMarkersLayerRef.current.clearLayers();
+        } catch (e) {
+          console.error("Error clearing custom markers layer:", e);
+        }
       }
+
       layerInstancesRef.current = {};
     };
-  }, [onMapReady]); // Initialize only once. onMapReady is a prop.
+  }, [onMapReady]); // Keep dependencies minimal for initialization
 
   // Update map view when center or zoom props change
   useEffect(() => {
@@ -243,11 +310,11 @@ const MapContainer = ({
           marker.bindPopup(`
             <div class="custom-marker-popup">
               <h3>${markerInfo.name || "Custom Marker"}</h3>
-              <p>Lat: ${markerInfo.lat.toFixed(5)}, Lng: ${markerInfo.lng.toFixed(5)}</p>
+              <p>Lat: ${markerInfo.lat.toFixed(
+                5
+              )}, Lng: ${markerInfo.lng.toFixed(5)}</p>
               ${
-                markerInfo.description
-                  ? `<p>${markerInfo.description}</p>`
-                  : ""
+                markerInfo.description ? `<p>${markerInfo.description}</p>` : ""
               }
             </div>
           `);
@@ -264,32 +331,63 @@ const MapContainer = ({
     const currentLayerInstances = layerInstancesRef.current;
     const allLayers = wmsService.getAllLayers();
 
+    // For debugging - log active layers
+    console.log("Active layers:", Array.from(activeLayers));
+
     allLayers.forEach((layerConfig) => {
       const layerId = layerConfig.id;
       const isActive = activeLayers.has(layerId);
       const existingLayer = currentLayerInstances[layerId];
 
-      if (isActive && !existingLayer) {
-        // Add layer
-        const newLayer = L.tileLayer
-          .wms(layerConfig.url, {
-            layers: layerConfig.layers,
-            format: layerConfig.format || "image/png",
-            transparent:
-              layerConfig.transparent !== undefined
-                ? layerConfig.transparent
-                : true,
-            attribution: layerConfig.attribution || "",
-            zIndex: layerConfig.zIndex || 10, // Ensure overlays are above base tiles
-          })
-          .addTo(map);
-        currentLayerInstances[layerId] = newLayer;
-      } else if (!isActive && existingLayer) {
-        // Remove layer
-        map.removeLayer(existingLayer);
-        delete currentLayerInstances[layerId];
+      console.log(
+        `Layer ${layerId}: active=${isActive}, exists=${!!existingLayer}`
+      );
+
+      try {
+        if (isActive && !existingLayer) {
+          // Add layer
+          let newLayer;
+
+          if (layerConfig.url) {
+            if (layerConfig.isWMS) {
+              newLayer = L.tileLayer.wms(layerConfig.url, {
+                layers: layerConfig.layers,
+                format: layerConfig.format || "image/png",
+                transparent:
+                  layerConfig.transparent !== undefined
+                    ? layerConfig.transparent
+                    : true,
+                attribution: layerConfig.attribution || "",
+                zIndex: layerConfig.zIndex || 10,
+              });
+            } else {
+              newLayer = L.tileLayer(layerConfig.url, {
+                attribution: layerConfig.attribution || "",
+                maxZoom: layerConfig.maxZoom || 19,
+                minZoom: layerConfig.minZoom || 1,
+                zIndex: layerConfig.zIndex || 10,
+              });
+            }
+
+            if (newLayer) {
+              newLayer.addTo(map);
+              currentLayerInstances[layerId] = newLayer;
+              console.log(`Added layer: ${layerId}`);
+            }
+          } else {
+            console.warn(`Cannot add layer ${layerId}: missing URL`);
+          }
+        } else if (!isActive && existingLayer) {
+          // Remove layer
+          map.removeLayer(existingLayer);
+          delete currentLayerInstances[layerId];
+          console.log(`Removed layer: ${layerId}`);
+        }
+      } catch (error) {
+        console.error(`Error handling layer ${layerId}:`, error);
       }
     });
+
     layerInstancesRef.current = currentLayerInstances;
   }, [activeLayers]);
 
@@ -315,6 +413,41 @@ const MapContainer = ({
     };
   }, [onLocationUpdate]);
 
+  // Add a new effect to handle offline tile errors
+  useEffect(() => {
+    if (!mapInstanceRef.current) return;
+
+    const map = mapInstanceRef.current;
+
+    // Add event listener for tile load errors
+    const handleTileError = (event) => {
+      // If offline, handle gracefully
+      if (!isOnline) {
+        const tile = event.tile;
+        // Apply a faded style to indicate offline tile
+        tile.style.opacity = "0.5";
+        tile.style.outline = "1px solid #ccc";
+
+        // Add an indicator to show this is an offline tile
+        const parent = tile.parentNode;
+        if (parent && !parent.querySelector(".offline-tile-indicator")) {
+          const indicator = document.createElement("div");
+          indicator.className = "offline-tile-indicator";
+          indicator.innerHTML = "⚠️";
+          indicator.title = "Tile not available offline";
+          parent.appendChild(indicator);
+        }
+      }
+    };
+
+    // Listen for tile errors globally
+    document.addEventListener("tileerror", handleTileError);
+
+    return () => {
+      document.removeEventListener("tileerror", handleTileError);
+    };
+  }, [isOnline]);
+
   return (
     <div className="map-container">
       {isLoading && (
@@ -330,6 +463,8 @@ const MapContainer = ({
         aria-label="Interactive map"
         role="application"
       />
+      {/* Add Offline Map Tools */}
+      <OfflineMapTools map={mapInstanceRef.current} isOnline={isOnline} />
     </div>
   );
 };
