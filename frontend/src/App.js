@@ -8,6 +8,7 @@ import VoiceStatusIndicator from "./components/VoiceStatusIndicator";
 import { wmsService } from "./services/WMSService";
 import { poiService } from "./services/POIService";
 import { geocodingService } from "./services/GeocodingService";
+import DebugPanel from "./components/DebugPanel";
 
 function App() {
   const [voiceCommands, setVoiceCommands] = useState([]);
@@ -23,6 +24,9 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [poiCategories, setPoiCategories] = useState([]);
   const [customMarkers, setCustomMarkers] = useState([]); // New state for user-added markers
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [showOfflineNotification, setShowOfflineNotification] = useState(false);
+  const [offlineMapAreas, setOfflineMapAreas] = useState([]);
 
   // On mount, try to get user location
   useEffect(() => {
@@ -31,26 +35,99 @@ function App() {
     const getUserLocation = async () => {
       try {
         setIsLoading(true);
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            const { latitude, longitude } = position.coords;
-            setCurrentLocation({ lat: latitude, lng: longitude });
-            setMapCenter({ lat: latitude, lng: longitude });
-            setIsLoading(false);
-          },
-          (error) => {
-            console.error("Error getting location:", error);
-            // Default to New Delhi if location access is denied
-            setCurrentLocation({ lat: 28.6139, lng: 77.209 });
-            setMapCenter({ lat: 28.6139, lng: 77.209 });
-            setIsLoading(false);
-          },
-          { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
-        );
+
+        // Check if geolocation is supported
+        if (!navigator.geolocation) {
+          console.error("Geolocation is not supported by this browser");
+          setCurrentLocation({ lat: 28.6139, lng: 77.209 }); // Default to New Delhi
+          setMapCenter({ lat: 28.6139, lng: 77.209 });
+          setIsLoading(false);
+
+          // Add a notification for the user
+          setVoiceCommands((prev) => [
+            {
+              type: "info",
+              rawCommand:
+                "Geolocation is not supported by your browser. Using default location.",
+              timestamp: new Date().toISOString(),
+              status: "completed",
+            },
+            ...prev,
+          ]);
+          return;
+        }
+
+        // Use Promise to handle geolocation with better error messaging
+        const getPositionPromise = () => {
+          return new Promise((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(
+              resolve,
+              (error) => {
+                let errorMessage;
+                switch (error.code) {
+                  case error.PERMISSION_DENIED:
+                    errorMessage =
+                      "Location access was denied. You can still use the app with a default location.";
+                    break;
+                  case error.POSITION_UNAVAILABLE:
+                    errorMessage =
+                      "Location information is unavailable. Using default location.";
+                    break;
+                  case error.TIMEOUT:
+                    errorMessage =
+                      "Request to get location timed out. Using default location.";
+                    break;
+                  default:
+                    errorMessage =
+                      "An unknown error occurred getting your location. Using default location.";
+                }
+                reject({ message: errorMessage, originalError: error });
+              },
+              { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+            );
+          });
+        };
+
+        try {
+          const position = await getPositionPromise();
+          const { latitude, longitude } = position.coords;
+          setCurrentLocation({ lat: latitude, lng: longitude });
+          setMapCenter({ lat: latitude, lng: longitude });
+
+          // Add success notification
+          setVoiceCommands((prev) => [
+            {
+              type: "info",
+              rawCommand: "Location detected successfully.",
+              timestamp: new Date().toISOString(),
+              status: "completed",
+            },
+            ...prev,
+          ]);
+        } catch (geoError) {
+          console.error("Error getting location:", geoError);
+
+          // Default to New Delhi if location access is denied
+          setCurrentLocation({ lat: 28.6139, lng: 77.209 });
+          setMapCenter({ lat: 28.6139, lng: 77.209 });
+
+          // Add user notification about location error
+          setVoiceCommands((prev) => [
+            {
+              type: "error",
+              rawCommand: geoError.message,
+              timestamp: new Date().toISOString(),
+              status: "completed",
+            },
+            ...prev,
+          ]);
+        }
       } catch (error) {
-        console.error("Location error:", error);
+        console.error("General location error:", error);
         setCurrentLocation({ lat: 28.6139, lng: 77.209 });
         setMapCenter({ lat: 28.6139, lng: 77.209 });
+        setIsLoading(false);
+      } finally {
         setIsLoading(false);
       }
     };
@@ -61,8 +138,25 @@ function App() {
 
   // Fetch POI categories on mount
   useEffect(() => {
-    const categories = poiService.getCategories(); // Assuming this returns { key, name, icon }
-    setPoiCategories(categories);
+    // Use the backend endpoint to fetch categories rather than the client method
+    const fetchCategories = async () => {
+      try {
+        const response = await fetch(
+          `${process.env.REACT_APP_BACKEND_URL}/categories`
+        );
+        if (!response.ok) {
+          throw new Error(`Failed to fetch categories: ${response.status}`);
+        }
+        const categories = await response.json();
+        setPoiCategories(categories);
+      } catch (error) {
+        console.error("Error fetching POI categories:", error);
+        // Fall back to local categories if backend fails
+        setPoiCategories(poiService.getCategories());
+      }
+    };
+
+    fetchCategories();
   }, []);
 
   // Handle voice command
@@ -73,10 +167,23 @@ function App() {
         timestamp: commandObj.timestamp || new Date().toISOString(),
         status: "processing",
       };
+
+      // Limit to only 3 most recent commands
       setVoiceCommands((prevCommands) => [
         commandWithTimestamp,
-        ...prevCommands.slice(0, 49),
+        ...prevCommands.slice(0, 2), // Keep only 2 previous commands plus the new one
       ]);
+
+      // Log the command for debugging
+      console.log("Voice command received:", commandObj);
+
+      // Show feedback that something was understood
+      if (commandObj.type !== "unknown" && commandObj.type !== "unknown_tf") {
+        showCommandFeedback(
+          `Processing: ${commandObj.rawCommand}`,
+          "processing"
+        );
+      }
 
       switch (commandObj.type) {
         case "search":
@@ -99,7 +206,10 @@ function App() {
           break;
         case "location_query":
           if (currentLocation) {
-            setMapCenter({ lat: currentLocation.lat, lng: currentLocation.lng });
+            setMapCenter({
+              lat: currentLocation.lat,
+              lng: currentLocation.lng,
+            });
             setMapZoom(16);
           } else {
             updateCommandStatus(
@@ -140,7 +250,11 @@ function App() {
           updateCommandStatus(
             commandWithTimestamp.timestamp,
             "error",
-            "Unknown command"
+            "Unknown command type"
+          );
+          showCommandFeedback(
+            `Sorry, I didn't understand "${commandObj.rawCommand}"`,
+            "error"
           );
       }
     },
@@ -210,7 +324,12 @@ function App() {
       return;
     }
 
-    if (typeof lat === "number" && typeof lng === "number" && !isNaN(lat) && !isNaN(lng)) {
+    if (
+      typeof lat === "number" &&
+      typeof lng === "number" &&
+      !isNaN(lat) &&
+      !isNaN(lng)
+    ) {
       const newMarker = { lat, lng, name, id: `custom-${Date.now()}` };
       setCustomMarkers((prevMarkers) => [...prevMarkers, newMarker]);
 
@@ -244,14 +363,21 @@ function App() {
       if (results && results.length > 0) {
         const firstResult = results[0];
         // Ensure lat and lng are valid numbers
-        if (firstResult &&
-            typeof firstResult.lat === 'number' && !isNaN(firstResult.lat) &&
-            typeof firstResult.lng === 'number' && !isNaN(firstResult.lng)) {
+        if (
+          firstResult &&
+          typeof firstResult.lat === "number" &&
+          !isNaN(firstResult.lat) &&
+          typeof firstResult.lng === "number" &&
+          !isNaN(firstResult.lng)
+        ) {
           setMapCenter({ lat: firstResult.lat, lng: firstResult.lng });
           setMapZoom(15);
           updateCommandStatus(commandObj.timestamp, "completed");
         } else {
-          console.warn("First search result lacks valid coordinates:", firstResult);
+          console.warn(
+            "First search result lacks valid coordinates:",
+            firstResult
+          );
           updateCommandStatus(
             commandObj.timestamp,
             "error",
@@ -299,33 +425,71 @@ function App() {
 
   // Handle layer command
   const handleLayerCommand = (commandObj) => {
-    if (commandObj.action === "show" && commandObj.layer) {
-      const layerId = wmsService.detectLayerFromCommand(commandObj.layer);
-      if (layerId) {
-        setActiveLayers((prev) => new Set([...prev, layerId]));
-      }
-    } else if (commandObj.action === "hide" && commandObj.layer) {
-      const layerId = wmsService.detectLayerFromCommand(commandObj.layer);
-      if (layerId) {
-        setActiveLayers((prev) => {
-          const newLayers = new Set(prev);
+    console.log("Layer command received:", commandObj);
+
+    if (!commandObj.layer) {
+      console.error("Missing layer in command:", commandObj);
+      updateCommandStatus(commandObj.timestamp, "error", "No layer specified");
+      return;
+    }
+
+    const layerId = wmsService.detectLayerFromCommand(commandObj.layer);
+    console.log(`Detected layer ID: ${layerId} for "${commandObj.layer}"`);
+
+    if (!layerId) {
+      console.error(`No layer found matching "${commandObj.layer}"`);
+      // Show available layers for debugging
+      const availableLayers = wmsService.getAllLayers().map((l) => l.name);
+      console.log("Available layers:", availableLayers);
+      updateCommandStatus(
+        commandObj.timestamp,
+        "error",
+        `Layer "${commandObj.layer}" not found. Try one of: ${availableLayers
+          .slice(0, 5)
+          .join(", ")}...`
+      );
+      return;
+    }
+
+    if (commandObj.action === "show") {
+      console.log(`Adding layer: ${layerId}`);
+      setActiveLayers((prev) => {
+        const newLayers = new Set([...prev]);
+        newLayers.add(layerId);
+        return newLayers;
+      });
+      updateCommandStatus(commandObj.timestamp, "completed", null);
+    } else if (commandObj.action === "hide") {
+      console.log(`Removing layer: ${layerId}`);
+      setActiveLayers((prev) => {
+        const newLayers = new Set([...prev]);
+        newLayers.delete(layerId);
+        return newLayers;
+      });
+      updateCommandStatus(commandObj.timestamp, "completed", null);
+    } else if (commandObj.action === "toggle") {
+      setActiveLayers((prev) => {
+        const newLayers = new Set([...prev]);
+        const hasLayer = newLayers.has(layerId);
+        console.log(
+          `Toggling layer: ${layerId} (currently ${hasLayer ? "on" : "off"})`
+        );
+
+        if (hasLayer) {
           newLayers.delete(layerId);
-          return newLayers;
-        });
-      }
-    } else if (commandObj.action === "toggle" && commandObj.layer) {
-      const layerId = wmsService.detectLayerFromCommand(commandObj.layer);
-      if (layerId) {
-        setActiveLayers((prev) => {
-          const newLayers = new Set(prev);
-          if (newLayers.has(layerId)) {
-            newLayers.delete(layerId);
-          } else {
-            newLayers.add(layerId);
-          }
-          return newLayers;
-        });
-      }
+        } else {
+          newLayers.add(layerId);
+        }
+        return newLayers;
+      });
+      updateCommandStatus(commandObj.timestamp, "completed", null);
+    } else {
+      console.error(`Unknown layer action: ${commandObj.action}`);
+      updateCommandStatus(
+        commandObj.timestamp,
+        "error",
+        `Unknown action "${commandObj.action}". Try "show", "hide", or "toggle"`
+      );
     }
   };
 
@@ -385,23 +549,65 @@ function App() {
   // Update handlePoiCategorySearch to handle errors better
   const handlePoiCategorySearch = (categoryKey) => {
     const category = poiCategories.find((c) => c.key === categoryKey);
-    if (category) {
-      const timestamp = new Date().toISOString();
-      // Create a proper command object with timestamp
-      const commandObj = {
-        type: "search",
-        query: category.name,
-        timestamp: timestamp
-      };
+    if (!category) {
+      console.error(`Category not found: ${categoryKey}`);
+      return;
+    }
+    
+    console.log("Searching for POI category:", category);
+    
+    const timestamp = new Date().toISOString();
+    // Create a proper command object with timestamp
+    const commandObj = {
+      type: "search",
+      query: `${category.name} near me`,  // Make the query more specific
+      timestamp: timestamp,
+    };
+    
+    // Update voice commands list with initial status
+    setVoiceCommands((prev) => [{
+      ...commandObj,
+      status: "processing",
+    }, ...prev.slice(0, 2)]); // Keep only 2 previous commands
+    
+    // Process the command
+    handleSearchCommand(commandObj);
+  };
+
+  // Add this useEffect for online/offline detection
+  useEffect(() => {
+    function handleOnlineStatus() {
+      setIsOnline(navigator.onLine);
+      setShowOfflineNotification(!navigator.onLine);
       
-      // Update voice commands list with initial status
-      setVoiceCommands(prev => [{
-        ...commandObj,
-        status: "processing"
-      }, ...prev.slice(0, 49)]);
-      
-      // Process the command
-      handleSearchCommand(commandObj);
+      // If coming back online, sync any offline data
+      if (navigator.onLine) {
+        syncOfflineData();
+      }
+    }
+    
+    window.addEventListener('online', handleOnlineStatus);
+    window.addEventListener('offline', handleOnlineStatus);
+    
+    // Initial status check
+    handleOnlineStatus();
+    
+    return () => {
+      window.removeEventListener('online', handleOnlineStatus);
+      window.removeEventListener('offline', handleOnlineStatus);
+    };
+  }, []);
+
+  // Add this function for offline data synchronization
+  const syncOfflineData = () => {
+    // Check if the browser supports Background Sync API
+    if ('serviceWorker' in navigator && 'SyncManager' in window) {
+      navigator.serviceWorker.ready.then(registration => {
+        registration.sync.register('sync-saved-searches');
+      }).catch(err => console.error('Background sync registration failed:', err));
+    } else {
+      // Fallback synchronization
+      syncOfflineDataManually();
     }
   };
 
@@ -450,9 +656,9 @@ function App() {
                     <h2>Explore Nearby</h2>
                   </div>
                   <div className="panel-content poi-categories-list">
-                    {poiCategories.map((category) => (
+                    {poiCategories.map((category, index) => (
                       <button
-                        key={category.key}
+                        key={category.key || `category-${index}`} // Ensure unique key
                         className="poi-category-button"
                         onClick={() => handlePoiCategorySearch(category.key)}
                         title={`Search for ${category.name}`}
@@ -490,20 +696,26 @@ function App() {
               <Route
                 path="/"
                 element={
-                  <MapContainer
-                    onMapReady={setMapInstance}
-                    onLocationUpdate={(loc) => {
-                      setCurrentLocation(loc);
-                    }}
-                    voiceStatus={voiceStatus}
-                    activeLayers={activeLayers}
-                    currentLocation={currentLocation}
-                    searchResults={searchResults}
-                    customMarkers={customMarkers} // Pass custom markers to MapContainer
-                    center={mapCenter}
-                    zoom={mapZoom}
-                    isLoading={isLoading}
-                  />
+                  <>
+                    <MapContainer
+                      onMapReady={setMapInstance}
+                      onLocationUpdate={(loc) => {
+                        setCurrentLocation(loc);
+                      }}
+                      voiceStatus={voiceStatus}
+                      activeLayers={activeLayers}
+                      currentLocation={currentLocation}
+                      searchResults={searchResults}
+                      customMarkers={customMarkers}
+                      center={mapCenter}
+                      zoom={mapZoom}
+                      isLoading={isLoading}
+                    />
+                    <DebugPanel
+                      activeLayers={activeLayers}
+                      wmsService={wmsService}
+                    />
+                  </>
                 }
               />
             </Routes>
@@ -512,7 +724,10 @@ function App() {
 
         {/* Help Modal */}
         {showHelp && (
-          <div className="help-modal-overlay" onClick={() => setShowHelp(false)}>
+          <div
+            className="help-modal-overlay"
+            onClick={() => setShowHelp(false)}
+          >
             <div
               className="help-modal-content"
               onClick={(e) => e.stopPropagation()}
@@ -542,16 +757,18 @@ function App() {
                     <h4>Search & Navigation</h4>
                     <ul className="command-examples">
                       <li>
-                        <strong>Search for locations:</strong> "Find restaurants near
-                        me", "Show hospitals in Delhi", "Where is the Eiffel Tower?"
+                        <strong>Search for locations:</strong> "Find restaurants
+                        near me", "Show hospitals in Delhi", "Where is the
+                        Eiffel Tower?"
                       </li>
                       <li>
                         <strong>Navigate:</strong> "Take me to Central Park",
                         "Directions to Taj Mahal", "Route to 123 Main Street"
                       </li>
                       <li>
-                        <strong>Points of Interest:</strong> "Find parks nearby",
-                        "Show me coffee shops", "Where are the nearest ATMs?"
+                        <strong>Points of Interest:</strong> "Find parks
+                        nearby", "Show me coffee shops", "Where are the nearest
+                        ATMs?"
                       </li>
                     </ul>
                   </div>
@@ -560,24 +777,24 @@ function App() {
                     <h4>Map Controls</h4>
                     <ul className="command-examples">
                       <li>
-                        <strong>Pan the map:</strong> "Pan left", "Pan right", "Pan up",
-                        "Pan down"
+                        <strong>Pan the map:</strong> "Pan left", "Pan right",
+                        "Pan up", "Pan down"
                       </li>
                       <li>
-                        <strong>Zoom control:</strong> "Zoom in", "Zoom out", "Set zoom
-                        level to 15"
+                        <strong>Zoom control:</strong> "Zoom in", "Zoom out",
+                        "Set zoom level to 15"
                       </li>
                       <li>
-                        <strong>Reset view:</strong> "Reset map", "Clear view", "Start
-                        over"
+                        <strong>Reset view:</strong> "Reset map", "Clear view",
+                        "Start over"
                       </li>
                       <li>
-                        <strong>Current location:</strong> "Where am I?", "Show my
-                        current location", "Center on me"
+                        <strong>Current location:</strong> "Where am I?", "Show
+                        my current location", "Center on me"
                       </li>
                       <li>
-                        <strong>Add markers:</strong> "Add marker", "Drop pin at Eiffel
-                        Tower", "Place marker here", "Mark this location"
+                        <strong>Add markers:</strong> "Add marker", "Drop pin at
+                        Eiffel Tower", "Place marker here", "Mark this location"
                       </li>
                     </ul>
                   </div>
@@ -586,30 +803,31 @@ function App() {
                     <h4>Map Layers & Data Visualization</h4>
                     <ul className="command-examples">
                       <li>
-                        <strong>Base Maps:</strong> "Show standard map", "Show satellite",
-                        "Switch to terrain"
+                        <strong>Base Maps:</strong> "Show standard map", "Show
+                        satellite", "Switch to terrain"
                       </li>
                       <li>
-                        <strong>Transportation:</strong> "Show traffic layer", "Show transit
-                        layer", "Show railway map", "Show cycling routes"
+                        <strong>Transportation:</strong> "Show traffic layer",
+                        "Show transit layer", "Show railway map", "Show cycling
+                        routes"
                       </li>
                       <li>
-                        <strong>Weather:</strong> "Show precipitation", "Show temperature",
-                        "Show clouds", "Show wind"
+                        <strong>Weather:</strong> "Show precipitation", "Show
+                        temperature", "Show clouds", "Show wind"
                       </li>
                       <li>
-                        <strong>Terrain:</strong> "Show topographic map", "Show elevation",
-                        "Show contour lines"
+                        <strong>Terrain:</strong> "Show topographic map", "Show
+                        elevation", "Show contour lines"
                       </li>
                       <li>
-                        <strong>Other Layers:</strong> "Show humanitarian layer", "Show sea
-                        map", "Show hiking trails"
+                        <strong>Other Layers:</strong> "Show humanitarian
+                        layer", "Show sea map", "Show hiking trails"
                       </li>
                     </ul>
                     <p>
                       <em>
-                        Try toggling layers with "show", "hide" or "toggle" followed by the
-                        layer name.
+                        Try toggling layers with "show", "hide" or "toggle"
+                        followed by the layer name.
                       </em>
                     </p>
                   </div>
@@ -618,8 +836,8 @@ function App() {
                 <div className="help-modal-section">
                   <h3>Map Data Sources</h3>
                   <p className="help-description">
-                    Aakash Vaani integrates various map data sources for rich geospatial
-                    information:
+                    Aakash Vaani integrates various map data sources for rich
+                    geospatial information:
                   </p>
 
                   <div className="help-sources">
@@ -627,14 +845,16 @@ function App() {
                       <h4>Base Maps</h4>
                       <ul>
                         <li>
-                          <strong>OpenStreetMap:</strong> Comprehensive worldwide mapping
-                          data
+                          <strong>OpenStreetMap:</strong> Comprehensive
+                          worldwide mapping data
                         </li>
                         <li>
-                          <strong>ESRI Satellite:</strong> High-resolution satellite imagery
+                          <strong>ESRI Satellite:</strong> High-resolution
+                          satellite imagery
                         </li>
                         <li>
-                          <strong>CartoDB:</strong> Beautiful cartographic base layers
+                          <strong>CartoDB:</strong> Beautiful cartographic base
+                          layers
                         </li>
                         <li>
                           <strong>Stamen Maps:</strong> Artistic map renderings
@@ -646,27 +866,32 @@ function App() {
                       <h4>Specialized Data</h4>
                       <ul>
                         <li>
-                          <strong>OpenWeatherMap:</strong> Real-time weather data
-                          visualization
+                          <strong>OpenWeatherMap:</strong> Real-time weather
+                          data visualization
                         </li>
                         <li>
-                          <strong>NASA GIBS:</strong> Earth observation satellite imagery
+                          <strong>NASA GIBS:</strong> Earth observation
+                          satellite imagery
                         </li>
                         <li>
-                          <strong>OpenTopoMap:</strong> Detailed topographic information
+                          <strong>OpenTopoMap:</strong> Detailed topographic
+                          information
                         </li>
                         <li>
-                          <strong>OpenRailwayMap:</strong> Global railway network data
+                          <strong>OpenRailwayMap:</strong> Global railway
+                          network data
                         </li>
                         <li>
-                          <strong>CyclOSM:</strong> Bicycle route and infrastructure data
+                          <strong>CyclOSM:</strong> Bicycle route and
+                          infrastructure data
                         </li>
                         <li>
-                          <strong>Humanitarian OSM:</strong> Maps for humanitarian response
+                          <strong>Humanitarian OSM:</strong> Maps for
+                          humanitarian response
                         </li>
                         <li>
-                          <strong>Bhuvan:</strong> Indian Space Research Organisation's
-                          geoportal
+                          <strong>Bhuvan:</strong> Indian Space Research
+                          Organisation's geoportal
                         </li>
                       </ul>
                     </div>
@@ -682,9 +907,9 @@ function App() {
                         <span className="mode-default">(Default)</span>
                       </h4>
                       <p>
-                        Uses your browser's speech recognition for accurate, comprehensive
-                        command processing. Requires internet connection and sends audio to
-                        cloud services.
+                        Uses your browser's speech recognition for accurate,
+                        comprehensive command processing. Requires internet
+                        connection and sends audio to cloud services.
                       </p>
                     </div>
 
@@ -694,14 +919,15 @@ function App() {
                         <span className="mode-privacy">(Privacy-Focused)</span>
                       </h4>
                       <p>
-                        On-device speech recognition using machine learning. Works offline and
-                        keeps your voice data on your device. Limited to basic commands but
-                        better for privacy.
+                        On-device speech recognition using machine learning.
+                        Works offline and keeps your voice data on your device.
+                        Limited to basic commands but better for privacy.
                       </p>
                     </div>
                   </div>
                   <p className="toggle-tip">
-                    Switch between modes using the toggle button below the microphone.
+                    Switch between modes using the toggle button below the
+                    microphone.
                   </p>
                 </div>
               </div>
