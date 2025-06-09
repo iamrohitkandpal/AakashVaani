@@ -363,7 +363,14 @@ class VoiceRecognitionEngine {
   }
 }
 
-const VoiceNavigator = ({ onVoiceCommand, onStatusChange }) => {
+const VoiceNavigator = ({
+  onVoiceCommand,
+  onStatusChange,
+  mapInstance,
+  currentLocation,
+  activeLayers,
+  showCommandFeedback, // Add this parameter
+}) => {
   const [isMicAvailable, setIsMicAvailable] = useState(false);
   const [isListeningState, setIsListeningState] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState("");

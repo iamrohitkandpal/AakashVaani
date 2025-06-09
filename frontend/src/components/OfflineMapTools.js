@@ -4,9 +4,38 @@ const OfflineMapTools = ({ map, isOnline }) => {
   const [showAreasList, setShowAreasList] = useState(false);
   const [savedAreas, setSavedAreas] = useState([]);
   const [downloadInProgress, setDownloadInProgress] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
   
   useEffect(() => {
     loadSavedAreas();
+  }, []);
+  
+  useEffect(() => {
+    const getLastUpdate = async () => {
+      try {
+        // Try from IndexedDB first (if service worker managed it)
+        const db = await openOfflineDatabase();
+        try {
+          const timestamp = await db.get('meta', 'last-cache-update');
+          if (timestamp) {
+            setLastUpdate(new Date(parseInt(timestamp, 10)));
+            return;
+          }
+        } catch (e) {
+          console.log('No service worker cache info found');
+        }
+        
+        // Fall back to localStorage
+        const localUpdateStr = localStorage.getItem('last-cache-update');
+        if (localUpdateStr) {
+          setLastUpdate(new Date(parseInt(localUpdateStr, 10)));
+        }
+      } catch (error) {
+        console.error('Error getting last update time:', error);
+      }
+    };
+    
+    getLastUpdate();
   }, []);
   
   const loadSavedAreas = async () => {
@@ -62,48 +91,53 @@ const OfflineMapTools = ({ map, isOnline }) => {
   };
   
   const downloadMapTiles = async (bounds, maxZoom, minZoom) => {
-    // This is a simplified version - actual implementation would
-    // need to calculate all tile coordinates in the bounds at each zoom level
     const tileLayers = [
       'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      // Add other tile sources you want to cache
+      'https://tile.thunderforest.com/cycle/{z}/{x}/{y}.png',
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
     ];
     
     const sw = bounds.getSouthWest();
     const ne = bounds.getNorthEast();
     
+    let downloadedTiles = 0;
+    let failedTiles = 0;
+    
     for (let z = minZoom; z <= maxZoom; z++) {
-      // Calculate tile coordinates at this zoom level
       const x1 = Math.floor((sw.lng + 180) / 360 * Math.pow(2, z));
       const x2 = Math.floor((ne.lng + 180) / 360 * Math.pow(2, z));
       const y1 = Math.floor((1 - Math.log(Math.tan(ne.lat * Math.PI / 180) + 1 / Math.cos(ne.lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, z));
       const y2 = Math.floor((1 - Math.log(Math.tan(sw.lat * Math.PI / 180) + 1 / Math.cos(sw.lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, z));
       
-      // For each tile source
       for (const tileTemplate of tileLayers) {
         for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) {
           for (let y = Math.min(y1, y2); y <= Math.max(y1, y2); y++) {
-            // Generate tile URL
             const url = tileTemplate
               .replace('{z}', z)
               .replace('{x}', x)
-              .replace('{s}', ['a', 'b', 'c'][Math.floor(Math.random() * 3)])
-              .replace('{y}', y);
+              .replace('{y}', y)
+              .replace('{s}', ['a', 'b', 'c'][Math.floor(Math.random() * 3)]);
             
-            // Fetch tile and store in cache
             try {
-              const cache = await caches.open('aakash-vaani-map-tiles');
+              const cache = await caches.open('map-tiles-v2');
               const response = await fetch(url, { mode: 'cors' });
               if (response.ok) {
-                await cache.put(url, response);
+                await cache.put(url, response.clone());
+                downloadedTiles++;
+              } else {
+                failedTiles++;
               }
             } catch (e) {
               console.warn(`Failed to cache tile: ${url}`, e);
+              failedTiles++;
             }
           }
         }
       }
     }
+    
+    console.log(`Downloaded ${downloadedTiles} tiles, ${failedTiles} failed`);
+    return downloadedTiles > 0;
   };
   
   const openOfflineDatabase = async () => {
@@ -232,6 +266,15 @@ const OfflineMapTools = ({ map, isOnline }) => {
           >
             Close
           </button>
+        </div>
+      )}
+      
+      {isOnline && lastUpdate && (
+        <div className="cache-status">
+          <span>Last updated: {lastUpdate.toLocaleString()}</span>
+          {new Date() - lastUpdate > 24 * 60 * 60 * 1000 && (
+            <span className="update-needed">⚠️ Update needed</span>
+          )}
         </div>
       )}
     </div>
