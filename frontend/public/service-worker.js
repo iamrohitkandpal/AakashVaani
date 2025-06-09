@@ -4,6 +4,10 @@ const API_CACHE = 'api-data-v2';
 const MAP_TILES_CACHE = 'map-tiles-v2';
 const MODEL_CACHE = 'tf-models-v2';
 
+// Add these constants at the top
+const CACHE_MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+const LAST_CACHE_UPDATE_KEY = 'last-cache-update';
+
 // App shell - critical resources needed for basic functionality
 const APP_SHELL_RESOURCES = [
   '/',
@@ -18,13 +22,28 @@ const APP_SHELL_RESOURCES = [
 
 // Known map tile providers to cache
 const TILE_PROVIDERS = [
-  'tile.openstreetmap.org',
+  'tile.openstreetmap.org', // Covers OpenStreetMap
   'a.tile.openstreetmap.org',
   'b.tile.openstreetmap.org',
   'c.tile.openstreetmap.org',
-  'tile.thunderforest.com',
-  'server.arcgisonline.com',
-  // Add other tile servers you use
+  'tile.thunderforest.com', // Covers Thunderforest layers
+  'server.arcgisonline.com', // Covers ESRI Satellite, ESRI World Imagery
+  'cartodb-basemaps.global.ssl.fastly.net', // Covers CartoDB Positron/Dark Matter (check exact hostname if {s} is used)
+  'stamen-tiles.a.ssl.fastly.net', // Covers Stamen Terrain/Toner/Watercolor (check exact hostname if {s} is used)
+  'tile.opentopomap.org', // Covers OpenTopoMap
+  'tile.openweathermap.org', // Covers OpenWeatherMap layers
+  'gibs.earthdata.nasa.gov', // Covers NASA GIBS layers
+  'tiles.openseamap.org', // Covers OpenSeaMap
+  'tile.openstreetmap.fr', // Covers CyclOSM, HOT OSM (and subdomains like a.tile.openstreetmap.fr)
+  'a.tile.openstreetmap.fr',
+  'b.tile.openstreetmap.fr',
+  'c.tile.openstreetmap.fr',
+  'tile-cyclosm.openstreetmap.fr', // Specific for CyclOSM if it uses this domain
+  'tiles.openrailwaymap.org', // Covers OpenRailwayMap
+  'bhuvan-vec1.nrsc.gov.in', // Bhuvan Vector
+  'bhuvan-ras1.nrsc.gov.in', // Bhuvan Raster
+  'nrsc.gov.in', // General Bhuvan domain if other subdomains are used
+  // Add other specific hostnames if new layers are added
 ];
 
 // Install event - cache app shell
@@ -151,31 +170,23 @@ function isModelRequest(request) {
 async function handleMapTileRequest(request) {
   const cache = await caches.open(MAP_TILES_CACHE);
   
-  // Try from cache first
+  // Try cache first
   const cachedResponse = await cache.match(request);
   if (cachedResponse) {
-    // Update cache in background if online
-    if (navigator.onLine) {
-      fetch(request)
-        .then(response => {
-          if (response.ok) {
-            cache.put(request, response);
-          }
-        })
-        .catch(() => {/* Ignore background fetch errors */});
-    }
     return cachedResponse;
   }
   
-  // If not in cache, fetch from network and cache
+  // If not in cache, fetch from network
   try {
     const response = await fetch(request);
     if (response.ok) {
-      cache.put(request, response.clone());
+      await cache.put(request, response.clone());
+      return response;
     }
-    return response;
+    // If fetch fails, return transparent tile
+    return createEmptyTile();
   } catch (error) {
-    // If offline and not cached, return transparent tile
+    console.error('Error fetching tile:', error);
     return createEmptyTile();
   }
 }
@@ -334,12 +345,14 @@ async function fetchWithNetworkFallback(request) {
   }
 }
 
-// Background sync for offline actions
+// Periodic cache refresh check
 self.addEventListener('sync', (event) => {
   if (event.tag === 'sync-saved-searches') {
     event.waitUntil(syncSavedSearches());
   } else if (event.tag === 'sync-offline-markers') {
     event.waitUntil(syncOfflineMarkers());
+  } else if (event.tag === 'refresh-offline-data') {
+    event.waitUntil(refreshOfflineData());
   }
 });
 
@@ -446,88 +459,168 @@ async function syncOfflineMarkers() {
   }
 }
 
-// Helper function to open IndexedDB
-async function openDB(name, version) {
+// Add this function to handle periodic refresh
+async function refreshOfflineData() {
+  try {
+    // Check if we're due for a refresh (once per day)
+    const lastUpdate = parseInt(await getLastUpdateTime(), 10) || 0;
+    const now = Date.now();
+    
+    if (now - lastUpdate < CACHE_MAX_AGE && lastUpdate !== 0) {
+      console.log('Cache is still fresh, no refresh needed');
+      return;
+    }
+    
+    console.log('Starting scheduled offline data refresh');
+    
+    // Fetch fresh offline data
+    const response = await fetch('/offline/data', {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'ServiceWorkerRequest'
+      }
+    });
+    
+    if (!response.ok) throw new Error(`Failed to fetch offline data: ${response.status}`);
+    
+    const freshData = await response.json();
+    const cache = await caches.open(API_CACHE);
+    
+    // Store fresh data
+    await cache.put(
+      new Request('/offline/data'),
+      new Response(JSON.stringify(freshData), {
+        headers: { 'Content-Type': 'application/json' }
+      })
+    );
+    
+    // Pre-cache map tiles for default locations
+    await cacheDefaultMapTiles(freshData.default_locations);
+    
+    // Update timestamp
+    await storeLastUpdateTime(now);
+    
+    console.log('Offline data refresh completed successfully');
+    return true;
+  } catch (error) {
+    console.error('Error refreshing offline data:', error);
+    return false;
+  }
+}
+
+// Add these helper functions
+async function cacheDefaultMapTiles(locations) {
+  const minZoom = 11;
+  const maxZoom = 16;
+  const tileServers = [
+    'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+  ];
+  
+  const cache = await caches.open(MAP_TILES_CACHE);
+  
+  // For each location, cache tiles around it
+  for (const location of locations) {
+    const lat = location.lat;
+    const lng = location.lng;
+    
+    // Cache tiles for multiple zoom levels
+    for (let z = minZoom; z <= maxZoom; z++) {
+      // Calculate tile coordinates
+      const tileX = Math.floor((lng + 180) / 360 * Math.pow(2, z));
+      const tileY = Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, z));
+      
+      // Cache neighboring tiles (3x3 area)
+      for (let x = tileX - 1; x <= tileX + 1; x++) {
+        for (let y = tileY - 1; y <= tileY + 1; y++) {
+          // For each tile server
+          for (const tileTemplate of tileServers) {
+            const url = tileTemplate
+              .replace('{z}', z)
+              .replace('{x}', x)
+              .replace('{s}', ['a', 'b', 'c'][Math.floor(Math.random() * 3)])
+              .replace('{y}', y);
+            
+            try {
+              const response = await fetch(url);
+              if (response.ok) {
+                await cache.put(new Request(url), response);
+              }
+            } catch (e) {
+              // Continue with other tiles even if some fail
+              console.warn(`Failed to cache tile: ${url}`, e);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+async function getLastUpdateTime() {
+  // Use IndexedDB to store the last update time
+  const db = await openDB('aakash-vaani-cache-meta', 1, (db) => {
+    if (!db.objectStoreNames.contains('meta')) {
+      db.createObjectStore('meta');
+    }
+  });
+  
+  return db.get('meta', LAST_CACHE_UPDATE_KEY) || '0';
+}
+
+async function storeLastUpdateTime(timestamp) {
+  const db = await openDB('aakash-vaani-cache-meta', 1);
+  return db.put('meta', timestamp.toString(), LAST_CACHE_UPDATE_KEY);
+}
+
+// Enhanced openDB function with schema upgrades
+async function openDB(name, version, upgradeCallback) {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(name, version);
     
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      
-      // Create stores if they don't exist
-      if (!db.objectStoreNames.contains('saved-searches')) {
-        db.createObjectStore('saved-searches', { keyPath: 'id' });
-      }
-      
-      if (!db.objectStoreNames.contains('offline-markers')) {
-        db.createObjectStore('offline-markers', { keyPath: 'id' });
-      }
-      
-      if (!db.objectStoreNames.contains('map-areas')) {
-        const mapAreasStore = db.createObjectStore('map-areas', { keyPath: 'id' });
-        mapAreasStore.createIndex('timestamp', 'timestamp', { unique: false });
-      }
-    };
+    if (upgradeCallback) {
+      request.onupgradeneeded = (event) => {
+        upgradeCallback(event.target.result);
+      };
+    }
     
     request.onsuccess = () => {
       const db = request.result;
-      
-      resolve({
-        get: (storeName, key) => {
+      const wrapped = {
+        get: (store, key) => {
           return new Promise((resolve, reject) => {
-            const transaction = db.transaction(storeName, 'readonly');
-            const store = transaction.objectStore(storeName);
-            const getRequest = store.get(key);
-            
-            getRequest.onsuccess = () => resolve(getRequest.result);
-            getRequest.onerror = () => reject(getRequest.error);
+            const transaction = db.transaction(store, 'readonly');
+            const objectStore = transaction.objectStore(store);
+            const req = objectStore.get(key);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
           });
         },
-        getAll: (storeName) => {
+        put: (store, value, key) => {
           return new Promise((resolve, reject) => {
-            const transaction = db.transaction(storeName, 'readonly');
-            const store = transaction.objectStore(storeName);
-            const getAllRequest = store.getAll();
-            
-            getAllRequest.onsuccess = () => resolve(getAllRequest.result);
-            getAllRequest.onerror = () => reject(getAllRequest.error);
+            const transaction = db.transaction(store, 'readwrite');
+            const objectStore = transaction.objectStore(store);
+            const req = key !== undefined ? 
+              objectStore.put(value, key) : 
+              objectStore.put(value);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
           });
         },
-        put: (storeName, value) => {
+        delete: (store, key) => {
           return new Promise((resolve, reject) => {
-            const transaction = db.transaction(storeName, 'readwrite');
-            const store = transaction.objectStore(storeName);
-            const putRequest = store.put(value);
-            
-            putRequest.onsuccess = () => resolve(putRequest.result);
-            putRequest.onerror = () => reject(putRequest.error);
+            const transaction = db.transaction(store, 'readwrite');
+            const objectStore = transaction.objectStore(store);
+            const req = objectStore.delete(key);
+            req.onsuccess = () => resolve();
+            req.onerror = () => reject(req.error);
           });
         },
-        delete: (storeName, key) => {
-          return new Promise((resolve, reject) => {
-            const transaction = db.transaction(storeName, 'readwrite');
-            const store = transaction.objectStore(storeName);
-            const deleteRequest = store.delete(key);
-            
-            deleteRequest.onsuccess = () => resolve(deleteRequest.result);
-            deleteRequest.onerror = () => reject(deleteRequest.error);
-          });
-        },
-        clear: (storeName) => {
-          return new Promise((resolve, reject) => {
-            const transaction = db.transaction(storeName, 'readwrite');
-            const store = transaction.objectStore(storeName);
-            const clearRequest = store.clear();
-            
-            clearRequest.onsuccess = () => resolve(clearRequest.result);
-            clearRequest.onerror = () => reject(clearRequest.error);
-          });
-        }
-      });
+        close: () => db.close()
+      };
+      resolve(wrapped);
     };
     
-    request.onerror = () => {
-      reject(request.error);
-    };
+    request.onerror = () => reject(request.error);
   });
 }
