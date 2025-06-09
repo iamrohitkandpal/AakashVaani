@@ -3,7 +3,7 @@ import httpx
 import logging
 import asyncio
 import motor.motor_asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid  # Add uuid import
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,9 +11,9 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from functools import lru_cache
 from dotenv import load_dotenv
-from backend.external_integrations.middleware import ErrorLoggingMiddleware
-from backend.external_integrations.cache import FileCache  # Add import at the top
-from backend.external_integrations.api_keys import ApiKeyManager
+from external_integrations.middleware import ErrorLoggingMiddleware
+from external_integrations.cache import FileCache  # Add import at the top
+from external_integrations.api_keys import ApiKeyManager
 
 # Configure logging
 logging.basicConfig(
@@ -553,10 +553,10 @@ async def sync_markers(data: List[Dict], request: Request):
 @app.get("/offline/data")
 async def get_offline_data(request: Request):
     """
-    Get essential data for offline usage
+    Get essential data for offline usage - enhanced with more data and better caching
     """
     try:
-        client_ip = request.client.host if request.client else "127.0.0.1"
+        client_ip = request.client.host if request.client and hasattr(request.client, "host") else "127.0.0.1"
         if not await check_rate_limit(client_ip):
             raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
@@ -574,15 +574,13 @@ async def get_offline_data(request: Request):
 
         # Get a few POIs for each location to cache
         sample_pois = []
-        for location in default_locations[
-            :2
-        ]:  # Limit to 2 locations to avoid rate limiting
+        for location in default_locations:  # Include all locations, not just 2
             try:
                 # Only do this if we haven't hit rate limits
-                amenities = ["hospital", "restaurant", "bank", "pharmacy"]
-                for amenity in amenities[:2]:  # Limit to 2 amenities per location
+                amenities = ["hospital", "restaurant", "bank", "pharmacy", "school", "cafe"]
+                for amenity in amenities[:3]:  # Include more amenities
                     query = f"{amenity} in {location['name']}"
-                    params = {"q": query, "format": "json", "limit": 3}
+                    params = {"q": query, "format": "json", "limit": 5}  # Increased limit
                     headers = {"User-Agent": USER_AGENT}
 
                     response = await http_client.get(
@@ -607,11 +605,43 @@ async def get_offline_data(request: Request):
                 )
                 continue
 
+        # Additional offline data for map and application
+        offline_map_config = {
+            "baseLayers": [
+                {
+                    "name": "OpenStreetMap",
+                    "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                    "attribution": "© OpenStreetMap contributors",
+                    "minZoom": 1,
+                    "maxZoom": 19
+                }
+            ],
+            "defaultCenter": {
+                "lat": 28.6139, 
+                "lng": 77.209
+            },
+            "defaultZoom": 13,
+            "minZoom": 3,
+            "maxZoom": 18
+        }
+
+        # Warning for offline mode limitations
+        offline_limitations = {
+            "geocoding": "Limited to cached locations",
+            "search": "Limited to cached POIs",
+            "voiceRecognition": "Uses on-device model with reduced accuracy",
+            "mapLayers": "Only basic map tiles available"
+        }
+
         return {
             "timestamp": datetime.now().isoformat(),
+            "expiryTime": (datetime.now() + timedelta(days=1)).isoformat(),
             "categories": categories,
             "default_locations": default_locations,
             "sample_pois": sample_pois,
+            "map_config": offline_map_config,
+            "limitations": offline_limitations,
+            "version": "1.0"
         }
     except Exception as e:
         logger.error(f"Error preparing offline data: {e}")
