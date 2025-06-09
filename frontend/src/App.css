@@ -903,6 +903,61 @@ body {
   }
 }
 
+/* Command feedback toast notification */
+.command-feedback {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-20px);
+  background-color: var(--dark-gray);
+  color: var(--white);
+  padding: 10px 16px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 9999;
+  opacity: 0;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+  max-width: 80%;
+}
+
+.command-feedback.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.command-feedback.error {
+  background-color: var(--error);
+}
+
+.command-feedback.processing {
+  background-color: var(--info);
+}
+
+.feedback-icon {
+  font-size: 1.2rem;
+}
+
+/* Cache Status */
+.cache-status {
+  font-size: 0.8rem;
+  color: var(--light-gray);
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  border-radius: var(--radius-sm);
+  background-color: rgba(0, 0, 0, 0.2);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.update-needed {
+  color: var(--warning);
+  font-weight: 500;
+}
+
 /* Responsive Styles */
 @media (max-width: 768px) {
   .app-header {

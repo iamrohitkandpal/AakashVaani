@@ -574,7 +574,61 @@ function App() {
     handleSearchCommand(commandObj);
   };
 
-  // Add this useEffect for online/offline detection
+  // Add this function to the App component
+  const scheduleOfflineDataRefresh = useCallback(() => {
+    if ('serviceWorker' in navigator && 'SyncManager' in window && navigator.onLine) {
+      navigator.serviceWorker.ready.then(registration => {
+        // Schedule a refresh once a day
+        registration.sync.register('refresh-offline-data')
+          .then(() => console.log('Scheduled offline data refresh'))
+          .catch(err => console.error('Failed to schedule offline data refresh:', err));
+      });
+    } else {
+      console.log('Background sync not supported or offline');
+      
+      // Fallback for browsers without Background Sync API
+      if (navigator.onLine) {
+        refreshOfflineDataManually();
+      }
+    }
+  }, []);
+
+  // Add this function to handle manual refresh
+  const refreshOfflineDataManually = async () => {
+    try {
+      setIsLoading(true);
+      
+      // Check when we last refreshed data
+      const lastUpdateStr = localStorage.getItem('last-cache-update');
+      const lastUpdate = lastUpdateStr ? parseInt(lastUpdateStr, 10) : 0;
+      const now = Date.now();
+      
+      // Only refresh if it's been more than 24 hours
+      if (now - lastUpdate >= 24 * 60 * 60 * 1000 || lastUpdate === 0) {
+        console.log('Manually refreshing offline data');
+        
+        // Fetch new data
+        const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/offline/data`);
+        if (!response.ok) throw new Error(`Failed to fetch offline data: ${response.status}`);
+        
+        const data = await response.json();
+        
+        // Store in local storage for offline access
+        localStorage.setItem('offline-data', JSON.stringify(data));
+        localStorage.setItem('last-cache-update', now.toString());
+        
+        console.log('Offline data refreshed successfully');
+      } else {
+        console.log('Offline data is still fresh, no refresh needed');
+      }
+    } catch (error) {
+      console.error('Error refreshing offline data manually:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Add this to your existing online/offline detection useEffect
   useEffect(() => {
     function handleOnlineStatus() {
       setIsOnline(navigator.onLine);
@@ -583,6 +637,7 @@ function App() {
       // If coming back online, sync any offline data
       if (navigator.onLine) {
         syncOfflineData();
+        scheduleOfflineDataRefresh(); // Add this line to schedule refresh
       }
     }
     
@@ -592,23 +647,37 @@ function App() {
     // Initial status check
     handleOnlineStatus();
     
+    // Initial schedule when component mounts
+    scheduleOfflineDataRefresh();
+    
     return () => {
       window.removeEventListener('online', handleOnlineStatus);
       window.removeEventListener('offline', handleOnlineStatus);
     };
-  }, []);
+  }, [scheduleOfflineDataRefresh]);
 
-  // Add this function for offline data synchronization
-  const syncOfflineData = () => {
-    // Check if the browser supports Background Sync API
-    if ('serviceWorker' in navigator && 'SyncManager' in window) {
-      navigator.serviceWorker.ready.then(registration => {
-        registration.sync.register('sync-saved-searches');
-      }).catch(err => console.error('Background sync registration failed:', err));
-    } else {
-      // Fallback synchronization
-      syncOfflineDataManually();
-    }
+  // Display visual feedback for commands
+  const showCommandFeedback = (message, status = "info") => {
+    // Create a temporary element to show feedback
+    const feedbackEl = document.createElement("div");
+    feedbackEl.className = `command-feedback ${status}`;
+    feedbackEl.innerHTML = `<span class="feedback-icon">${
+      status === "error" ? "⚠️" : status === "processing" ? "⏳" : "✓"
+    }</span><span>${message}</span>`;
+    
+    // Add to document
+    document.body.appendChild(feedbackEl);
+    
+    // Add visible class after a small delay to trigger animation
+    setTimeout(() => {
+      feedbackEl.classList.add("visible");
+    }, 10);
+    
+    // Remove after timeout
+    setTimeout(() => {
+      feedbackEl.classList.remove("visible");
+      setTimeout(() => feedbackEl.remove(), 500); // Remove after fade-out animation
+    }, 3000);
   };
 
   return (
@@ -647,7 +716,7 @@ function App() {
                 mapInstance={mapInstance}
                 currentLocation={currentLocation}
                 activeLayers={activeLayers}
-                // onLayerChange={handleLayerChange} // This prop might not be used by VoiceNavigator
+                showCommandFeedback={showCommandFeedback} // Add this line
               />
 
               {poiCategories.length > 0 && (
