@@ -100,40 +100,69 @@ const OfflineMapTools = ({ map, isOnline }) => {
     const sw = bounds.getSouthWest();
     const ne = bounds.getNorthEast();
     
+    // Add progress tracking
+    let totalTiles = 0;
     let downloadedTiles = 0;
-    let failedTiles = 0;
     
+    // Calculate total tiles first
     for (let z = minZoom; z <= maxZoom; z++) {
       const x1 = Math.floor((sw.lng + 180) / 360 * Math.pow(2, z));
       const x2 = Math.floor((ne.lng + 180) / 360 * Math.pow(2, z));
       const y1 = Math.floor((1 - Math.log(Math.tan(ne.lat * Math.PI / 180) + 1 / Math.cos(ne.lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, z));
       const y2 = Math.floor((1 - Math.log(Math.tan(sw.lat * Math.PI / 180) + 1 / Math.cos(sw.lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, z));
       
-      for (const tileTemplate of tileLayers) {
-        for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) {
-          for (let y = Math.min(y1, y2); y <= Math.max(y1, y2); y++) {
-            const url = tileTemplate
-              .replace('{z}', z)
-              .replace('{x}', x)
-              .replace('{y}', y)
-              .replace('{s}', ['a', 'b', 'c'][Math.floor(Math.random() * 3)]);
-            
-            try {
-              const cache = await caches.open('map-tiles-v2');
-              const response = await fetch(url, { mode: 'cors' });
-              if (response.ok) {
-                await cache.put(url, response.clone());
-                downloadedTiles++;
-              } else {
+      // Calculate tile coordinates...
+      const tilesX = Math.max(x1, x2) - Math.min(x1, x2) + 1;
+      const tilesY = Math.max(y1, y2) - Math.min(y1, y2) + 1;
+      totalTiles += tilesX * tilesY * tileLayers.length;
+    }
+    
+    // Create progress element
+    const progressDiv = document.createElement('div');
+    progressDiv.className = 'tile-download-progress';
+    progressDiv.style = 'position:fixed; bottom:20px; right:20px; background:rgba(0,0,0,0.7); color:white; padding:10px; border-radius:5px; z-index:1000;';
+    document.body.appendChild(progressDiv);
+    
+    // Download tiles with progress updates
+    try {
+      for (let z = minZoom; z <= maxZoom; z++) {
+        const x1 = Math.floor((sw.lng + 180) / 360 * Math.pow(2, z));
+        const x2 = Math.floor((ne.lng + 180) / 360 * Math.pow(2, z));
+        const y1 = Math.floor((1 - Math.log(Math.tan(ne.lat * Math.PI / 180) + 1 / Math.cos(ne.lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, z));
+        const y2 = Math.floor((1 - Math.log(Math.tan(sw.lat * Math.PI / 180) + 1 / Math.cos(sw.lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, z));
+        
+        for (const tileTemplate of tileLayers) {
+          for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) {
+            for (let y = Math.min(y1, y2); y <= Math.max(y1, y2); y++) {
+              const url = tileTemplate
+                .replace('{z}', z)
+                .replace('{x}', x)
+                .replace('{y}', y)
+                .replace('{s}', ['a', 'b', 'c'][Math.floor(Math.random() * 3)]);
+              
+              try {
+                const cache = await caches.open('map-tiles-v2');
+                const response = await fetch(url, { mode: 'cors' });
+                if (response.ok) {
+                  await cache.put(url, response.clone());
+                  downloadedTiles++;
+                } else {
+                  failedTiles++;
+                }
+              } catch (e) {
+                console.warn(`Failed to cache tile: ${url}`, e);
                 failedTiles++;
               }
-            } catch (e) {
-              console.warn(`Failed to cache tile: ${url}`, e);
-              failedTiles++;
+              
+              // Update progress
+              progressDiv.textContent = `Downloading tiles: ${downloadedTiles}/${totalTiles} (${Math.round(downloadedTiles/totalTiles*100)}%)`;
             }
           }
         }
       }
+    } finally {
+      // Remove progress indicator when done
+      document.body.removeChild(progressDiv);
     }
     
     console.log(`Downloaded ${downloadedTiles} tiles, ${failedTiles} failed`);

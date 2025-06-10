@@ -46,6 +46,13 @@ const TILE_PROVIDERS = [
   // Add other specific hostnames if new layers are added
 ];
 
+// Add version tracking for tile layers
+const TILE_VERSIONS = {
+  'openstreetmap': 'v1',
+  'thunderforest': 'v1',
+  'arcgis': 'v1'
+};
+
 // Install event - cache app shell
 self.addEventListener('install', (event) => {
   self.skipWaiting(); // Take over as the active service worker immediately
@@ -168,13 +175,20 @@ function isModelRequest(request) {
 
 // Handle map tile requests - cache-first, update in background
 async function handleMapTileRequest(request) {
-  const cache = await caches.open(MAP_TILES_CACHE);
+  const url = new URL(request.url);
   
-  // Try cache first
-  const cachedResponse = await cache.match(request);
-  if (cachedResponse) {
-    return cachedResponse;
-  }
+  // Extract provider from URL
+  const provider = getTileProvider(url);
+  if (!provider) return fetch(request);
+  
+  // Create versioned cache key
+  const cacheKey = `${url.toString()}#${TILE_VERSIONS[provider] || 'v1'}`;
+  
+  // Check cache with versioned key
+  const cache = await caches.open(MAP_TILES_CACHE);
+  const cachedResponse = await cache.match(cacheKey);
+  
+  if (cachedResponse) return cachedResponse;
   
   // If not in cache, fetch from network
   try {
@@ -623,4 +637,19 @@ async function openDB(name, version, upgradeCallback) {
     
     request.onerror = () => reject(request.error);
   });
+}
+
+// Helper function to get tile provider from URL
+function getTileProvider(url) {
+  if (url.hostname.includes('openstreetmap')) {
+    return 'openstreetmap';
+  }
+  if (url.hostname.includes('thunderforest')) {
+    return 'thunderforest';
+  }
+  if (url.hostname.includes('arcgisonline')) {
+    return 'arcgis';
+  }
+  // Add more providers as needed
+  return null;
 }
