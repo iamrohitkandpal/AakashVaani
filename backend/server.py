@@ -1,19 +1,19 @@
 import os
-import httpx
+import uuid
 import logging
 import asyncio
 import motor.motor_asyncio
-from datetime import datetime, timedelta
-import uuid  # Add uuid import
+import httpx
+from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from functools import lru_cache
 from dotenv import load_dotenv
-from external_integrations.middleware import ErrorLoggingMiddleware
-from external_integrations.cache import FileCache  # Add import at the top
-from external_integrations.api_keys import ApiKeyManager
+from contextlib import asynccontextmanager
+from httpx import RequestError
 
 # Configure logging
 logging.basicConfig(
@@ -21,50 +21,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
-app = FastAPI(title="Aakash Vaani API", version="1.0.0")
-
-# Add middleware with proper error handling
-try:
-    from starlette.middleware.base import BaseHTTPMiddleware
-
-    app.add_middleware(BaseHTTPMiddleware, dispatch=ErrorLoggingMiddleware())
-    logger.info("Successfully added ErrorLoggingMiddleware")
-except Exception as e:
-    logger.error(f"Failed to add ErrorLoggingMiddleware: {e}")
-    # Continue without the middleware to prevent application failure
-
-# Shared HTTP client (reuse connections)
-# Better HTTP client setup with error handling
-try:
-    http_client = httpx.AsyncClient(timeout=15.0)
-except Exception as e:
-    logger.error(f"Failed to initialize HTTP client: {e}")
-    # Still create a client with defaults as fallback
-    http_client = httpx.AsyncClient()
-
 # Constants
 USER_AGENT = "AakashVaaniApp/1.0"
 DEFAULT_RADIUS_KM = 2.0
 MAX_RADIUS_KM = 10.0
-CACHE_LIFETIME_SECONDS = 3600  # 1 hour
+CACHE_LIFETIME_SECONDS = 3600
 RATE_LIMIT_CALLS = 100
-RATE_LIMIT_PERIOD = 3600  # 1 hour
+RATE_LIMIT_PERIOD = 3600
 
-# More secure CORS configuration
+# CORS configuration
 allowed_origins = ["http://localhost:3000", "https://aakash-vaani.example.com"]
-
 if os.getenv("ENVIRONMENT") == "development":
-    # In development, allow all origins
     allowed_origins = ["*"]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
-)
 
 # Load environment variables
 load_dotenv()
@@ -73,32 +41,24 @@ load_dotenv()
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.getenv("DB_NAME", "aakash_vaani_db")
 
-# Create MongoDB client
+# MongoDB client initialization
 mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URL)
 db = mongo_client[DB_NAME]
-
-# Initialize cache after other initializations
-cache = FileCache(cache_dir="backend/cache")
-
-# Initialize API key manager after other initializations
-api_key_manager = ApiKeyManager()
+logger.info(f"MongoDB client initialized with database {DB_NAME}")
 
 # Global flag for DB status
-db_is_connected = False
+db_is_connected: bool = False
 
-
-# --- Request Models ---
+# Request Models
 class GeocodeRequest(BaseModel):
     query: str
     limit: Optional[int] = Field(5, ge=1, le=50)
     country_code: Optional[str] = None
 
-
 class ReverseGeocodeRequest(BaseModel):
     lat: float = Field(..., ge=-90, le=90)
     lng: float = Field(..., ge=-180, le=180)
     zoom: Optional[int] = Field(18, ge=1, le=18)
-
 
 class NearbySearchRequest(BaseModel):
     lat: float = Field(..., ge=-90, le=90)
@@ -106,7 +66,6 @@ class NearbySearchRequest(BaseModel):
     query: str
     radius_km: Optional[float] = Field(DEFAULT_RADIUS_KM, ge=0.1, le=MAX_RADIUS_KM)
     limit: Optional[int] = Field(20, ge=1, le=100)
-
 
 class LocationResponse(BaseModel):
     id: str
@@ -117,12 +76,10 @@ class LocationResponse(BaseModel):
     address: Dict[str, Any]
     distance: Optional[float] = None
 
-
-# --- Utilities ---
+# Utilities
 @lru_cache(maxsize=1000)
 def convert_query_to_amenity(query: str) -> str:
     """Convert user query to OSM amenity tag."""
-    # Extended mapping
     mapping = {
         "hospital": "hospital",
         "clinic": "clinic",
@@ -165,44 +122,45 @@ def convert_query_to_amenity(query: str) -> str:
         "train": "station",
         "fire": "fire_station",
     }
-    q = query.lower().strip()
-    return mapping.get(q, q)
+    return mapping.get(query.lower().strip(), query.lower().strip())
 
-
-def format_location_response(data: Dict) -> LocationResponse:
+def format_location_response(data: Dict[str, Any]) -> Dict[str, Any]:
     """Format response data to a standardized format."""
     try:
-        return LocationResponse(
-            id=data.get("place_id", data.get("id", str(data.get("osm_id", "")))),
-            name=data.get("name", data.get("display_name", "")),
-            type=data.get("type", data.get("category", "amenity")),
-            lat=float(data.get("lat", 0)),
-            lng=float(data.get("lon", 0)),
-            address=data.get("address", {}),
-            distance=data.get("distance", None),
-        )
-    except Exception as e:
-        logger.error(f"Error formatting location: {e}")
-        # Return minimal data to avoid complete failure
-        return LocationResponse(
-            id=str(data.get("osm_id", "")),
-            name=data.get("display_name", "Unknown"),
-            type="unknown",
-            lat=0.0,
-            lng=0.0,
-            address={},
-        )
+        lat = float(data.get("lat", 0.0))
+        lng = float(data.get("lon", 0.0))
+        return {
+            "id": str(data.get("place_id", data.get("osm_id", uuid.uuid4()))),
+            "name": data.get("name", data.get("display_name", "Unknown location")),
+            "type": data.get("type", "place"),
+            "lat": lat,
+            "lng": lng,
+            "address": data.get("address", {}),
+            "distance": data.get("distance")
+        }
+    except (ValueError, TypeError) as e:
+        logger.error(f"Error formatting location response: {e}")
+        return {
+            "id": str(uuid.uuid4()),
+            "name": "Error processing location",
+            "type": "error",
+            "lat": 0.0,
+            "lng": 0.0,
+            "address": {},
+            "distance": None
+        }
 
-
-# --- Rate limiting ---
-call_counts = {}
-
+# Rate limiting
+call_counts: Dict[str, Dict[str, Any]] = {}
 
 async def check_rate_limit(client_ip: str) -> bool:
     """Simple rate limiting mechanism."""
     now = asyncio.get_event_loop().time()
     if client_ip not in call_counts:
-        call_counts[client_ip] = {"count": 1, "reset_at": now + RATE_LIMIT_PERIOD}
+        call_counts[client_ip] = {
+            "count": 1,
+            "reset_at": now + RATE_LIMIT_PERIOD
+        }
         return True
 
     client = call_counts[client_ip]
@@ -211,488 +169,366 @@ async def check_rate_limit(client_ip: str) -> bool:
         client["reset_at"] = now + RATE_LIMIT_PERIOD
         return True
 
-    if client["count"] > RATE_LIMIT_CALLS:
+    if client["count"] >= RATE_LIMIT_CALLS:
         return False
 
     client["count"] += 1
     return True
 
-
-# --- Routes ---
-@app.get("/")
-async def root():
-    """API health check and info."""
-    return {"status": "online", "service": "GeoVoice API", "version": "1.0.0"}
-
-
-@app.post("/geocode", response_model=List[LocationResponse])
-async def geocode(
-    req: GeocodeRequest, background_tasks: BackgroundTasks, request: Request
-):
-    """
-    Forward geocoding using Nominatim.
-    """
-    # More robust client IP extraction
+# Lifespan context manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global db_is_connected
     try:
-        client_ip = (
-            request.client.host
-            if request.client and hasattr(request.client, "host")
-            else "127.0.0.1"
-        )
-    except Exception as e:
-        logger.warning(f"Failed to get client IP: {e}")
-        client_ip = "127.0.0.1"
-
-    if not await check_rate_limit(client_ip):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-    # Try to get from cache first
-    cache_key = f"geocode_{req.query}_{req.limit}_{req.country_code}"
-    cached_data = cache.get(cache_key)
-    if cached_data:
-        import json
-
-        try:
-            # Convert string items to dictionaries if needed
-            data = [
-                json.loads(item) if isinstance(item, str) else item
-                for item in cached_data
-            ]
-            return [format_location_response(item) for item in data]
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.warning(f"Error processing cached data: {e}")
-            # Fall through to original API call
-
-    url = "https://nominatim.openstreetmap.org/search"
-    params = {
-        "q": req.query,
-        "format": "json",
-        "limit": req.limit,
-        "addressdetails": 1,
-    }
-
-    if req.country_code:
-        params["countrycodes"] = req.country_code
-
-    headers = {"User-Agent": USER_AGENT}
-    try:
-        response = await http_client.get(url, params=params, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-
-        # Format the responses
-        results = [format_location_response(item) for item in data]
-
-        # Cache the raw data for future use
-        background_tasks.add_task(cache.set, cache_key, data)
-
-        return results
-
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error during geocode request: {e}")
-        raise HTTPException(
-            status_code=e.response.status_code, detail=f"External API error: {str(e)}"
-        )
-
-    except httpx.RequestError as e:
-        logger.error(f"Request error during geocode request: {e}")
-        raise HTTPException(
-            status_code=503, detail=f"Error connecting to geocoding service: {str(e)}"
-        )
-
-    except Exception as e:
-        logger.error(f"Unexpected error during geocode request: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@app.post("/reverse-geocode", response_model=LocationResponse)
-async def reverse_geocode(req: ReverseGeocodeRequest, request: Request):
-    """
-    Reverse geocoding using Nominatim.
-    """
-    # Get client IP for rate limiting
-    client_ip = request.client.host if request.client else "127.0.0.1"
-    if not await check_rate_limit(client_ip):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-    url = "https://nominatim.openstreetmap.org/reverse"
-    params = {
-        "lat": req.lat,
-        "lon": req.lng,
-        "format": "json",
-        "addressdetails": 1,
-        "zoom": req.zoom,
-    }
-    headers = {"User-Agent": USER_AGENT}
-
-    try:
-        response = await http_client.get(url, params=params, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-
-        # Format the response
-        return format_location_response(data)
-
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error during reverse geocode request: {e}")
-        raise HTTPException(
-            status_code=e.response.status_code, detail=f"External API error: {str(e)}"
-        )
-
-    except httpx.RequestError as e:
-        logger.error(f"Request error during reverse geocode request: {e}")
-        raise HTTPException(
-            status_code=503, detail=f"Error connecting to geocoding service: {str(e)}"
-        )
-
-    except Exception as e:
-        logger.error(f"Unexpected error during reverse geocode request: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@app.post("/nearby", response_model=List[LocationResponse])
-async def nearby_search(req: NearbySearchRequest, request: Request):
-    """
-    Search for nearby points of interest.
-    """
-    # Get client IP for rate limiting
-    client_ip = request.client.host if request.client else "127.0.0.1"
-    if not await check_rate_limit(client_ip):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-    try:
-        # Convert query to OSM amenity tag
-        amenity = convert_query_to_amenity(req.query)
-
-        # Build Overpass query with radius in meters (convert from km)
-        radius_km = req.radius_km if req.radius_km is not None else DEFAULT_RADIUS_KM
-        radius_m = int(radius_km * 1000)
-
-        # Limit radius to reasonable value
-        if radius_m > MAX_RADIUS_KM * 1000:
-            radius_m = MAX_RADIUS_KM * 1000
-
-        overpass_query = f"""
-        [out:json];
-        node["amenity"="{amenity}"](around:{radius_m},{req.lat},{req.lng});
-        out body {req.limit};
-        """
-
-        headers = {"User-Agent": USER_AGENT}
-        params = {"data": overpass_query}
-
-        response = await http_client.get(
-            "https://overpass-api.de/api/interpreter",
-            params=params,
-            headers=headers,
-        )
-
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Error from Overpass API: {response.text}",
-            )
-
-        data = response.json()
-
-        # Process results
-        results = []
-        for element in data.get("elements", []):
-            if element.get("type") == "node":
-                lat = element.get("lat")
-                lng = element.get("lon")
-
-                # Calculate distance from query point
-                from math import sin, cos, sqrt, atan2, radians
-
-                R = 6371.0  # Earth radius in km
-
-                lat1 = radians(req.lat)
-                lon1 = radians(req.lng)
-                lat2 = radians(lat)
-                lon2 = radians(lng)
-
-                dlon = lon2 - lon1
-                dlat = lat2 - lat1
-
-                a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
-                c = 2 * atan2(sqrt(a), sqrt(1 - a))
-
-                distance = R * c  # Distance in km
-
-                # Build location response
-                location = LocationResponse(
-                    id=str(element.get("id", "")),
-                    name=element.get("tags", {}).get(
-                        "name", f"{amenity.title()} #{len(results)+1}"
-                    ),
-                    type=amenity,
-                    lat=lat,
-                    lng=lng,
-                    address={},  # We would need a geocoder to get address details
-                    distance=distance,
-                )
-
-                results.append(location)
-
-        # Sort by distance
-        results.sort(key=lambda x: x.distance)
-
-        # Limit results
-        results = results[: req.limit]
-
-        return results
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in nearby search: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/categories")
-async def get_categories():
-    """
-    Get available POI categories.
-    """
-    categories = [
-        {"key": "restaurant", "name": "Restaurants", "icon": "🍽️"},
-        {"key": "hospital", "name": "Hospitals", "icon": "🏥"},
-        {"key": "pharmacy", "name": "Pharmacies", "icon": "💊"},
-        {"key": "school", "name": "Schools", "icon": "🏫"},
-        {"key": "cafe", "name": "Cafes", "icon": "☕"},
-        {"key": "bank", "name": "Banks", "icon": "🏦"},
-        {"key": "atm", "name": "ATMs", "icon": "💰"},
-        {"key": "fuel", "name": "Gas Stations", "icon": "⛽"},
-        {"key": "bus_station", "name": "Bus Stations", "icon": "🚌"},
-        {"key": "train_station", "name": "Train Stations", "icon": "🚆"},
-        {"key": "park", "name": "Parks", "icon": "🌳"},
-        {"key": "supermarket", "name": "Supermarkets", "icon": "🛒"},
-    ]
-    return categories
-
-
-@app.post("/sync/searches")
-async def sync_searches(data: List[Dict], request: Request):
-    """
-    Sync saved searches from client to server
-    """
-    try:
-        # Apply the same robust client IP extraction
-        try:
-            client_ip = (
-                request.client.host
-                if request.client and hasattr(request.client, "host")
-                else "127.0.0.1"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to get client IP: {e}")
-            client_ip = "127.0.0.1"
-
-        if not await check_rate_limit(client_ip):
-            raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-        # Store in MongoDB if available and connected
-        if db_is_connected:
-            # Add unique IDs and timestamps if missing
-            for item in data:
-                if "id" not in item:
-                    # Explicitly convert UUID to string
-                    item["id"] = f"search-{str(uuid.uuid4())}"  # Use UUID for unique ID
-                if "synced_at" not in item:
-                    item["synced_at"] = datetime.now().isoformat()
-
-            result = await db.searches.insert_many(data)
-            return {"status": "success", "synced": len(result.inserted_ids)}
-        else:
-            return {"status": "skipped", "reason": "Database not available"}
-    except Exception as e:
-        logger.error(f"Error syncing searches: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/sync/markers")
-async def sync_markers(data: List[Dict], request: Request):
-    """
-    Sync custom map markers from client to server
-    """
-    try:
-        # Apply the same robust client IP extraction
-        try:
-            client_ip = (
-                request.client.host
-                if request.client and hasattr(request.client, "host")
-                else "127.0.0.1"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to get client IP: {e}")
-            client_ip = "127.0.0.1"
-
-        if not await check_rate_limit(client_ip):
-            raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-        # Store in MongoDB if available and connected
-        if db_is_connected:
-            # Add unique IDs and timestamps if missing
-            for item in data:
-                if "id" not in item:
-                    # Explicitly convert UUID to string
-                    item["id"] = f"marker-{str(uuid.uuid4())}"  # Use UUID for unique ID
-                if "synced_at" not in item:
-                    item["synced_at"] = datetime.now().isoformat()
-
-            result = await db.markers.insert_many(data)
-            return {"status": "success", "synced": len(result.inserted_ids)}
-        else:
-            return {"status": "skipped", "reason": "Database not available"}
-    except Exception as e:
-        logger.error(f"Error syncing markers: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/offline/data")
-async def get_offline_data(request: Request):
-    """
-    Get essential data for offline usage - enhanced with more data and better caching
-    """
-    try:
-        client_ip = request.client.host if request.client and hasattr(request.client, "host") else "127.0.0.1"
-        if not await check_rate_limit(client_ip):
-            raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-        # Get the categories
-        categories = await get_categories()
-
-        # Use Nominatim API to get some basic POI data for common locations
-        # This is a simplified version - in a real app, you'd use more sophisticated data sources
-        default_locations = [
-            {"name": "New Delhi", "lat": 28.6139, "lng": 77.209},
-            {"name": "Mumbai", "lat": 19.0760, "lng": 72.8777},
-            {"name": "Bangalore", "lat": 12.9716, "lng": 77.5946},
-            {"name": "Chennai", "lat": 13.0827, "lng": 80.2707},
-        ]
-
-        # Get a few POIs for each location to cache
-        sample_pois = []
-        for location in default_locations:  # Include all locations, not just 2
-            try:
-                # Only do this if we haven't hit rate limits
-                amenities = ["hospital", "restaurant", "bank", "pharmacy", "school", "cafe"]
-                for amenity in amenities[:3]:  # Include more amenities
-                    query = f"{amenity} in {location['name']}"
-                    params = {"q": query, "format": "json", "limit": 5}  # Increased limit
-                    headers = {"User-Agent": USER_AGENT}
-
-                    response = await http_client.get(
-                        "https://nominatim.openstreetmap.org/search",
-                        params=params,
-                        headers=headers,
-                    )
-
-                    if response.status_code == 200:
-                        results = response.json()
-                        formatted_results = [
-                            format_location_response(item) for item in results
-                        ]
-                        sample_pois.extend(formatted_results)
-
-                    # Be nice to Nominatim API - add delay between requests
-                    await asyncio.sleep(1)
-
-            except Exception as e:
-                logger.warning(
-                    f"Error fetching sample POIs for {location['name']}: {e}"
-                )
-                continue
-
-        # Additional offline data for map and application
-        offline_map_config = {
-            "baseLayers": [
-                {
-                    "name": "OpenStreetMap",
-                    "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-                    "attribution": "© OpenStreetMap contributors",
-                    "minZoom": 1,
-                    "maxZoom": 19
-                }
-            ],
-            "defaultCenter": {
-                "lat": 28.6139, 
-                "lng": 77.209
-            },
-            "defaultZoom": 13,
-            "minZoom": 3,
-            "maxZoom": 18
-        }
-
-        # Warning for offline mode limitations
-        offline_limitations = {
-            "geocoding": "Limited to cached locations",
-            "search": "Limited to cached POIs",
-            "voiceRecognition": "Uses on-device model with reduced accuracy",
-            "mapLayers": "Only basic map tiles available"
-        }
-
-        return {
-            "timestamp": datetime.now().isoformat(),
-            "expiryTime": (datetime.now() + timedelta(days=1)).isoformat(),
-            "categories": categories,
-            "default_locations": default_locations,
-            "sample_pois": sample_pois,
-            "map_config": offline_map_config,
-            "limitations": offline_limitations,
-            "version": "1.0"
-        }
-    except Exception as e:
-        logger.error(f"Error preparing offline data: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# Add endpoint for API keys
-@app.get("/api-keys/status")
-async def get_api_key_status(request: Request):
-    """
-    Get the status of API keys (masked)
-    """
-    # Only allow certain origins for security
-    origin = request.headers.get("Origin", "")
-    if origin not in allowed_origins and "*" not in allowed_origins:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    return {"keys": api_key_manager.all_keys(), "timestamp": datetime.now().isoformat()}
-
-
-# Add startup and shutdown events for MongoDB
-@app.on_event("startup")
-async def startup_db_client():
-    global db_is_connected  # Declare global to modify
-    try:
-        # Verify database connection
         await mongo_client.admin.command("ping")
         logger.info(f"Connected to MongoDB at {MONGO_URL}")
-        db_is_connected = True  # Set connection status
-
-        # Create indexes
+        db_is_connected = True
         await db.searches.create_index("timestamp")
         await db.markers.create_index("timestamp")
         await db.users.create_index("email", unique=True)
         logger.info("Database indexes ensured.")
     except Exception as e:
         logger.error(f"Failed to connect to MongoDB or ensure indexes: {e}")
-        db_is_connected = False  # Ensure flag is false on failure
-        # Don't raise exception to allow app to start without DB
+        db_is_connected = False
 
+    yield
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
     mongo_client.close()
     logger.info("Closed MongoDB connection")
-    await http_client.aclose()
-    logger.info("Closed HTTP client")
 
+# FastAPI instance
+app = FastAPI(
+    title="Aakash Vaani API",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
-# Entry point for standalone execution
-if __name__ == "__main__":
-    import uvicorn
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    uvicorn.run("server:app", host="0.0.0.0", port=8001, reload=True)
+# Request validation middleware
+@app.middleware("http")
+async def validate_request(request: Request, call_next):
+    if request.method == "POST" and request.headers.get("content-type") != "application/json":
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Content-Type must be application/json for POST requests"}
+        )
+    return await call_next(request)
+
+# Routes
+@app.get("/")
+async def root():
+    return {
+        "name": "Aakash Vaani API",
+        "version": "1.0.0",
+        "status": "online",
+        "database_connected": db_is_connected
+    }
+
+@app.post("/geocode", response_model=List[Dict[str, Any]])
+async def geocode(request: GeocodeRequest, background_tasks: BackgroundTasks):
+    """Geocode a location query"""
+    try:
+        params = {
+            "q": request.query,
+            "limit": request.limit,
+            "format": "json",
+            "addressdetails": 1
+        }
+        if request.country_code:
+            params["countrycodes"] = request.country_code
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                "https://nominatim.openstreetmap.org/search",
+                params=params,
+                headers={"User-Agent": USER_AGENT}
+            )
+            response.raise_for_status()
+            results = response.json()
+
+        formatted_results = [
+            {
+                "lat": float(result["lat"]),
+                "lng": float(result["lon"]),
+                "name": result["display_name"],
+                "type": result.get("type", "unknown"),
+                "address": result.get("address", {})
+            }
+            for result in results
+        ]
+
+        if db_is_connected:
+            background_tasks.add_task(
+                db.searches.insert_one,
+                {
+                    "query": request.query,
+                    "timestamp": datetime.now(timezone.utc),
+                    "results_count": len(formatted_results),
+                    "type": "geocode"
+                }
+            )
+
+        return formatted_results
+    except RequestError as e:
+        logger.error(f"Request failed: {e}")
+        raise HTTPException(status_code=503, detail="External service unavailable")
+    except Exception as e:
+        logger.error(f"Error in geocoding: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/reverse-geocode", response_model=Dict[str, Any])
+async def reverse_geocode(req: ReverseGeocodeRequest):
+    """Reverse geocode a location"""
+    try:
+        params = {
+            "lat": req.lat,
+            "lon": req.lng,
+            "zoom": req.zoom,
+            "format": "json",
+            "addressdetails": 1
+        }
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                "https://nominatim.openstreetmap.org/reverse",
+                params=params,
+                headers={"User-Agent": USER_AGENT}
+            )
+            response.raise_for_status()
+            result = response.json()
+
+        return format_location_response(result)
+    except RequestError as e:
+        logger.error(f"Request failed: {e}")
+        raise HTTPException(status_code=503, detail="External service unavailable")
+    except Exception as e:
+        logger.error(f"Error in reverse geocoding: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/nearby", response_model=List[Dict[str, Any]])
+async def nearby_search(request: NearbySearchRequest):
+    """Search for nearby points of interest"""
+    try:
+        amenity = convert_query_to_amenity(request.query)
+        overpass_url = "https://overpass-api.de/api/interpreter"
+        radius_km = request.radius_km if request.radius_km is not None else DEFAULT_RADIUS_KM
+        radius_meters = radius_km * 1000
+
+        query = f"""
+        [out:json][timeout:25];
+        (
+          node["amenity"="{amenity}"](around:{radius_meters},{request.lat},{request.lng});
+          way["amenity"="{amenity}"](around:{radius_meters},{request.lat},{request.lng});
+          relation["amenity"="{amenity}"](around:{radius_meters},{request.lat},{request.lng});
+        );
+        out center;
+        """
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(overpass_url, content=query)
+            response.raise_for_status()
+            result = response.json()
+
+        pois = []
+        for element in result.get("elements", []):
+            try:
+                if element.get("type") == "node":
+                    lat = element.get("lat")
+                    lon = element.get("lon")
+                elif "center" in element:
+                    lat = element["center"].get("lat")
+                    lon = element["center"].get("lon")
+                else:
+                    continue
+
+                if lat is None or lon is None:
+                    continue
+
+                distance_km = ((lat - request.lat)**2 + (lon - request.lng)**2)**0.5 * 111
+                tags = element.get("tags", {})
+
+                poi = {
+                    "id": str(element.get("id", uuid.uuid4())),
+                    "name": tags.get("name", f"{amenity.title()} {element.get('id', '')}"),
+                    "type": amenity,
+                    "lat": lat,
+                    "lng": lon,
+                    "distance": round(distance_km, 2),
+                    "address": {
+                        "road": tags.get("addr:street"),
+                        "city": tags.get("addr:city"),
+                        "country": tags.get("addr:country")
+                    },
+                    "details": {
+                        "website": tags.get("website"),
+                        "phone": tags.get("phone"),
+                        "opening_hours": tags.get("opening_hours")
+                    }
+                }
+                pois.append(poi)
+            except Exception as e:
+                logger.error(f"Error processing POI element: {e}")
+
+        pois.sort(key=lambda x: x.get("distance", float('inf')))
+        return pois[:request.limit]
+    except RequestError as e:
+        logger.error(f"Request failed: {e}")
+        raise HTTPException(status_code=503, detail="External service unavailable")
+    except Exception as e:
+        logger.error(f"Error in nearby search: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/categories")
+async def get_categories():
+    """Get available POI categories"""
+    return [
+        {"key": "restaurant", "name": "Restaurants", "icon": "🍽️"},
+        {"key": "cafe", "name": "Cafes", "icon": "☕"},
+        {"key": "hotel", "name": "Hotels", "icon": "🏨"},
+        {"key": "hospital", "name": "Hospitals", "icon": "🏥"},
+        {"key": "pharmacy", "name": "Pharmacies", "icon": "💊"},
+        {"key": "bank", "name": "Banks", "icon": "🏦"},
+        {"key": "atm", "name": "ATMs", "icon": "💳"},
+        {"key": "school", "name": "Schools", "icon": "🏫"},
+        {"key": "park", "name": "Parks", "icon": "🌳"},
+        {"key": "supermarket", "name": "Supermarkets", "icon": "🛒"}
+    ]
+
+@app.post("/sync/searches")
+async def sync_searches(data: List[Dict], request: Request, background_tasks: BackgroundTasks):
+    """Sync saved searches from client to server"""
+    if not db_is_connected:
+        raise HTTPException(status_code=503, detail="Database not connected")
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not await check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    result = {"synced": 0, "failed": 0, "ids": []}
+    for item in data:
+        try:
+            item["server_timestamp"] = datetime.now(timezone.utc)
+            background_tasks.add_task(
+                db.searches.insert_one,
+                item
+            )
+            result["synced"] += 1
+            result["ids"].append(str(item.get("_id", uuid.uuid4())))
+        except Exception as e:
+            logger.error(f"Failed to sync search item: {e}")
+            result["failed"] += 1
+
+    return result
+
+@app.post("/sync/markers")
+async def sync_markers(data: List[Dict], request: Request, background_tasks: BackgroundTasks):
+    """Sync custom map markers from client to server"""
+    if not db_is_connected:
+        raise HTTPException(status_code=503, detail="Database not connected")
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not await check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    result = {"synced": 0, "failed": 0, "ids": []}
+    for marker in data:
+        try:
+            marker["server_timestamp"] = datetime.now(timezone.utc)
+            marker_id = marker.get("id", str(uuid.uuid4()))
+            marker["id"] = marker_id
+            background_tasks.add_task(
+                db.markers.update_one,
+                {"id": marker_id},
+                {"$set": marker},
+                upsert=True
+            )
+            result["synced"] += 1
+            result["ids"].append(marker_id)
+        except Exception as e:
+            logger.error(f"Failed to sync marker: {e}")
+            result["failed"] += 1
+
+    return result
+
+@app.get("/offline/data")
+async def get_offline_data(request: Request):
+    """Get essential data for offline usage"""
+    client_ip = request.client.host if request.client else "unknown"
+    if not await check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    offline_bundle = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "categories": [
+            {"key": "restaurant", "name": "Restaurants", "icon": "🍽️"},
+            {"key": "cafe", "name": "Cafes", "icon": "☕"},
+            {"key": "hotel", "name": "Hotels", "icon": "🏨"},
+            {"key": "hospital", "name": "Hospitals", "icon": "🏥"},
+            {"key": "pharmacy", "name": "Pharmacies", "icon": "💊"},
+            {"key": "bank", "name": "Banks", "icon": "🏦"},
+            {"key": "atm", "name": "ATMs", "icon": "💳"}
+        ],
+        "default_locations": [
+            {"name": "New Delhi, India", "lat": 28.6139, "lng": 77.2090},
+            {"name": "Mumbai, India", "lat": 19.0760, "lng": 72.8777},
+            {"name": "Kolkata, India", "lat": 22.5726, "lng": 88.3639}
+        ],
+        "command_examples": [
+            {"command": "find restaurants near me", "type": "search"},
+            {"command": "show satellite map", "type": "layer"},
+            {"command": "zoom in", "type": "zoom"},
+            {"command": "navigate to central park", "type": "navigate"}
+        ],
+        "recent_searches": []
+    }
+
+    if db_is_connected:
+        try:
+            recent_searches = await db.searches.find().sort("timestamp", -1).limit(10).to_list(10)
+            offline_bundle["recent_searches"] = [
+                {**search, "_id": str(search["_id"])} for search in recent_searches
+            ]
+        except Exception as e:
+            logger.error(f"Failed to get recent searches: {e}")
+
+    return offline_bundle
+
+@app.get("/api-keys/status")
+async def get_api_key_status():
+    """Get the status of API keys (masked)"""
+    def mask_key(key: Optional[str]) -> Optional[str]:
+        if not key:
+            return None
+        if len(key) <= 8:
+            return "*" * len(key)
+        return f"{key[:4]}{'*' * (len(key) - 8)}{key[-4:]}"
+
+    return {
+        "status": "ok",
+        "keys": {
+            "openweathermap": {
+                "available": bool(os.getenv("OPENWEATHERMAP_API_KEY")),
+                "masked": mask_key(os.getenv("OPENWEATHERMAP_API_KEY"))
+            },
+            "thunderforest": {
+                "available": bool(os.getenv("THUNDERFOREST_API_KEY")),
+                "masked": mask_key(os.getenv("THUNDERFOREST_API_KEY"))
+            },
+            "bhuvan": {
+                "available": bool(os.getenv("BHUVAN_API_KEY")),
+                "masked": mask_key(os.getenv("BHUVAN_API_KEY"))
+            },
+            "nasa": {
+                "available": bool(os.getenv("NASA_API_KEY")),
+                "masked": mask_key(os.getenv("NASA_API_KEY"))
+            }
+        }
+    }
