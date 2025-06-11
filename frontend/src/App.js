@@ -1,19 +1,19 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
-import "./App.css";
-import MapContainer from "./components/MapContainer";
-import VoiceNavigator from "./components/VoiceNavigator";
-import VoiceCommandLog from "./components/VoiceCommandLog";
-import VoiceStatusIndicator from "./components/VoiceStatusIndicator";
-import { wmsService } from "./services/WMSService";
-import { poiService } from "./services/POIService";
-import { geocodingService } from "./services/GeocodingService";
-import DebugPanel from "./components/DebugPanel";
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import './App.css';
+import MapContainer from './components/MapContainer';
+import VoiceNavigator from './components/VoiceNavigator';
+import VoiceCommandLog from './components/VoiceCommandLog';
+import VoiceStatusIndicator from './components/VoiceStatusIndicator';
+import { wmsService } from './services/WMSService';
+import { poiService } from './services/POIService';
+import { geocodingService } from './services/GeocodingService';
+import DebugPanel from './components/DebugPanel';
 
 function App() {
   const [voiceCommands, setVoiceCommands] = useState([]);
   const [mapInstance, setMapInstance] = useState(null);
-  const [voiceStatus, setVoiceStatus] = useState("idle");
+  const [voiceStatus, setVoiceStatus] = useState('idle');
   const [currentLocation, setCurrentLocation] = useState(null);
   const [activeLayers, setActiveLayers] = useState(new Set());
   const [showHelp, setShowHelp] = useState(false);
@@ -38,7 +38,7 @@ function App() {
 
         // Check if geolocation is supported
         if (!navigator.geolocation) {
-          console.error("Geolocation is not supported by this browser");
+          console.error('Geolocation is not supported by this browser');
           setCurrentLocation({ lat: 28.6139, lng: 77.209 }); // Default to New Delhi
           setMapCenter({ lat: 28.6139, lng: 77.209 });
           setIsLoading(false);
@@ -46,11 +46,11 @@ function App() {
           // Add a notification for the user
           setVoiceCommands((prev) => [
             {
-              type: "info",
+              type: 'info',
               rawCommand:
-                "Geolocation is not supported by your browser. Using default location.",
+                'Geolocation is not supported by your browser. Using default location.',
               timestamp: new Date().toISOString(),
-              status: "completed",
+              status: 'completed',
             },
             ...prev,
           ]);
@@ -67,19 +67,19 @@ function App() {
                 switch (error.code) {
                   case error.PERMISSION_DENIED:
                     errorMessage =
-                      "Location access was denied. You can still use the app with a default location.";
+                      'Location access was denied. You can still use the app with a default location.';
                     break;
                   case error.POSITION_UNAVAILABLE:
                     errorMessage =
-                      "Location information is unavailable. Using default location.";
+                      'Location information is unavailable. Using default location.';
                     break;
                   case error.TIMEOUT:
                     errorMessage =
-                      "Request to get location timed out. Using default location.";
+                      'Request to get location timed out. Using default location.';
                     break;
                   default:
                     errorMessage =
-                      "An unknown error occurred getting your location. Using default location.";
+                      'An unknown error occurred getting your location. Using default location.';
                 }
                 reject({ message: errorMessage, originalError: error });
               },
@@ -97,15 +97,15 @@ function App() {
           // Add success notification
           setVoiceCommands((prev) => [
             {
-              type: "info",
-              rawCommand: "Location detected successfully.",
+              type: 'info',
+              rawCommand: 'Location detected successfully.',
               timestamp: new Date().toISOString(),
-              status: "completed",
+              status: 'completed',
             },
             ...prev,
           ]);
         } catch (geoError) {
-          console.error("Error getting location:", geoError);
+          console.error('Error getting location:', geoError);
 
           // Default to New Delhi if location access is denied
           setCurrentLocation({ lat: 28.6139, lng: 77.209 });
@@ -114,16 +114,16 @@ function App() {
           // Add user notification about location error
           setVoiceCommands((prev) => [
             {
-              type: "error",
+              type: 'error',
               rawCommand: geoError.message,
               timestamp: new Date().toISOString(),
-              status: "completed",
+              status: 'completed',
             },
             ...prev,
           ]);
         }
       } catch (error) {
-        console.error("General location error:", error);
+        console.error('General location error:', error);
         setCurrentLocation({ lat: 28.6139, lng: 77.209 });
         setMapCenter({ lat: 28.6139, lng: 77.209 });
         setIsLoading(false);
@@ -150,7 +150,7 @@ function App() {
         const categories = await response.json();
         setPoiCategories(categories);
       } catch (error) {
-        console.error("Error fetching POI categories:", error);
+        console.error('Error fetching POI categories:', error);
         // Fall back to local categories if backend fails
         setPoiCategories(poiService.getCategories());
       }
@@ -165,7 +165,7 @@ function App() {
       const commandWithTimestamp = {
         ...commandObj,
         timestamp: commandObj.timestamp || new Date().toISOString(),
-        status: "processing",
+        status: 'processing',
       };
 
       // Limit to only 3 most recent commands
@@ -175,36 +175,36 @@ function App() {
       ]);
 
       // Log the command for debugging
-      console.log("Voice command received:", commandObj);
+      console.log('Voice command received:', commandObj);
 
       // Show feedback that something was understood
-      if (commandObj.type !== "unknown" && commandObj.type !== "unknown_tf") {
+      if (commandObj.type !== 'unknown' && commandObj.type !== 'unknown_tf') {
         showCommandFeedback(
           `Processing: ${commandObj.rawCommand}`,
-          "processing"
+          'processing'
         );
       }
 
       switch (commandObj.type) {
-        case "search":
+        case 'search':
           handleSearchCommand(commandObj);
           break;
-        case "navigate":
+        case 'navigate':
           handleNavigationCommand(commandObj);
           break;
-        case "layer":
+        case 'layer':
           handleLayerCommand(commandObj);
           break;
-        case "zoom":
+        case 'zoom':
           handleZoomCommand(commandObj);
           break;
-        case "reset":
+        case 'reset':
           handleResetCommand();
           break;
-        case "help":
+        case 'help':
           setShowHelp(true);
           break;
-        case "location_query":
+        case 'location_query':
           if (currentLocation) {
             setMapCenter({
               lat: currentLocation.lat,
@@ -214,26 +214,26 @@ function App() {
           } else {
             updateCommandStatus(
               commandWithTimestamp.timestamp,
-              "error",
-              "Current location not available yet."
+              'error',
+              'Current location not available yet.'
             );
           }
           break;
-        case "pan":
+        case 'pan':
           if (mapInstance) {
             const offset = mapInstance.getSize().y / 4;
             let panBy;
             switch (commandObj.direction) {
-              case "left":
+              case 'left':
                 panBy = [-offset, 0];
                 break;
-              case "right":
+              case 'right':
                 panBy = [offset, 0];
                 break;
-              case "up":
+              case 'up':
                 panBy = [0, -offset];
                 break;
-              case "down":
+              case 'down':
                 panBy = [0, offset];
                 break;
               default:
@@ -242,19 +242,19 @@ function App() {
             if (panBy) mapInstance.panBy(panBy);
           }
           break;
-        case "add_marker":
+        case 'add_marker':
           handleAddMarkerCommand(commandObj);
           break;
         default:
-          console.log("Unknown command type:", commandObj.type, commandObj);
+          console.log('Unknown command type:', commandObj.type, commandObj);
           updateCommandStatus(
             commandWithTimestamp.timestamp,
-            "error",
-            "Unknown command type"
+            'error',
+            'Unknown command type'
           );
           showCommandFeedback(
             `Sorry, I didn't understand "${commandObj.rawCommand}"`,
-            "error"
+            'error'
           );
       }
     },
@@ -277,22 +277,22 @@ function App() {
           name = results[0].name || commandObj.locationQuery;
 
           // Update command status
-          updateCommandStatus(commandObj.timestamp, "completed");
+          updateCommandStatus(commandObj.timestamp, 'completed');
         } else {
           updateCommandStatus(
             commandObj.timestamp,
-            "error",
+            'error',
             `Could not find location: ${commandObj.locationQuery}`
           );
           setIsLoading(false);
           return;
         }
       } catch (error) {
-        console.error("Error geocoding for add marker:", error);
+        console.error('Error geocoding for add marker:', error);
         updateCommandStatus(
           commandObj.timestamp,
-          "error",
-          "Failed to geocode location for marker."
+          'error',
+          'Failed to geocode location for marker.'
         );
         setIsLoading(false);
         return;
@@ -306,27 +306,27 @@ function App() {
       lng = center.lng;
 
       // Update command status
-      updateCommandStatus(commandObj.timestamp, "completed");
+      updateCommandStatus(commandObj.timestamp, 'completed');
     } else if (currentLocation) {
       // Fallback to user's current location
       lat = currentLocation.lat;
       lng = currentLocation.lng;
-      name = "My Location";
+      name = 'My Location';
 
       // Update command status
-      updateCommandStatus(commandObj.timestamp, "completed");
+      updateCommandStatus(commandObj.timestamp, 'completed');
     } else {
       updateCommandStatus(
         commandObj.timestamp,
-        "error",
-        "Map or location not available to add marker."
+        'error',
+        'Map or location not available to add marker.'
       );
       return;
     }
 
     if (
-      typeof lat === "number" &&
-      typeof lng === "number" &&
+      typeof lat === 'number' &&
+      typeof lng === 'number' &&
       !isNaN(lat) &&
       !isNaN(lng)
     ) {
@@ -339,8 +339,8 @@ function App() {
     } else {
       updateCommandStatus(
         commandObj.timestamp,
-        "error",
-        "Invalid coordinates for marker."
+        'error',
+        'Invalid coordinates for marker.'
       );
     }
   };
@@ -348,7 +348,7 @@ function App() {
   // Handle search command
   const handleSearchCommand = async (commandObj) => {
     if (!commandObj.query) {
-      updateCommandStatus(commandObj.timestamp, "error", "No query provided");
+      updateCommandStatus(commandObj.timestamp, 'error', 'No query provided');
       return;
     }
     setIsLoading(true);
@@ -365,35 +365,35 @@ function App() {
         // Ensure lat and lng are valid numbers
         if (
           firstResult &&
-          typeof firstResult.lat === "number" &&
+          typeof firstResult.lat === 'number' &&
           !isNaN(firstResult.lat) &&
-          typeof firstResult.lng === "number" &&
+          typeof firstResult.lng === 'number' &&
           !isNaN(firstResult.lng)
         ) {
           setMapCenter({ lat: firstResult.lat, lng: firstResult.lng });
           setMapZoom(15);
-          updateCommandStatus(commandObj.timestamp, "completed");
+          updateCommandStatus(commandObj.timestamp, 'completed');
         } else {
           console.warn(
-            "First search result lacks valid coordinates:",
+            'First search result lacks valid coordinates:',
             firstResult
           );
           updateCommandStatus(
             commandObj.timestamp,
-            "error",
-            "Search successful, but no map location found for the top result."
+            'error',
+            'Search successful, but no map location found for the top result.'
           );
         }
       } else {
         updateCommandStatus(
           commandObj.timestamp,
-          "error",
-          "No results found for your search."
+          'error',
+          'No results found for your search.'
         );
       }
     } catch (error) {
-      console.error("Search error:", error);
-      updateCommandStatus(commandObj.timestamp, "error", error.message);
+      console.error('Search error:', error);
+      updateCommandStatus(commandObj.timestamp, 'error', error.message);
     } finally {
       setIsLoading(false);
     }
@@ -417,7 +417,7 @@ function App() {
         setSearchResults([destination]);
       }
     } catch (error) {
-      console.error("Navigation error:", error);
+      console.error('Navigation error:', error);
     } finally {
       setIsLoading(false);
     }
@@ -425,11 +425,11 @@ function App() {
 
   // Handle layer command
   const handleLayerCommand = (commandObj) => {
-    console.log("Layer command received:", commandObj);
+    console.log('Layer command received:', commandObj);
 
     if (!commandObj.layer) {
-      console.error("Missing layer in command:", commandObj);
-      updateCommandStatus(commandObj.timestamp, "error", "No layer specified");
+      console.error('Missing layer in command:', commandObj);
+      updateCommandStatus(commandObj.timestamp, 'error', 'No layer specified');
       return;
     }
 
@@ -440,39 +440,39 @@ function App() {
       console.error(`No layer found matching "${commandObj.layer}"`);
       // Show available layers for debugging
       const availableLayers = wmsService.getAllLayers().map((l) => l.name);
-      console.log("Available layers:", availableLayers);
+      console.log('Available layers:', availableLayers);
       updateCommandStatus(
         commandObj.timestamp,
-        "error",
+        'error',
         `Layer "${commandObj.layer}" not found. Try one of: ${availableLayers
           .slice(0, 5)
-          .join(", ")}...`
+          .join(', ')}...`
       );
       return;
     }
 
-    if (commandObj.action === "show") {
+    if (commandObj.action === 'show') {
       console.log(`Adding layer: ${layerId}`);
       setActiveLayers((prev) => {
         const newLayers = new Set([...prev]);
         newLayers.add(layerId);
         return newLayers;
       });
-      updateCommandStatus(commandObj.timestamp, "completed", null);
-    } else if (commandObj.action === "hide") {
+      updateCommandStatus(commandObj.timestamp, 'completed', null);
+    } else if (commandObj.action === 'hide') {
       console.log(`Removing layer: ${layerId}`);
       setActiveLayers((prev) => {
         const newLayers = new Set([...prev]);
         newLayers.delete(layerId);
         return newLayers;
       });
-      updateCommandStatus(commandObj.timestamp, "completed", null);
-    } else if (commandObj.action === "toggle") {
+      updateCommandStatus(commandObj.timestamp, 'completed', null);
+    } else if (commandObj.action === 'toggle') {
       setActiveLayers((prev) => {
         const newLayers = new Set([...prev]);
         const hasLayer = newLayers.has(layerId);
         console.log(
-          `Toggling layer: ${layerId} (currently ${hasLayer ? "on" : "off"})`
+          `Toggling layer: ${layerId} (currently ${hasLayer ? 'on' : 'off'})`
         );
 
         if (hasLayer) {
@@ -482,12 +482,12 @@ function App() {
         }
         return newLayers;
       });
-      updateCommandStatus(commandObj.timestamp, "completed", null);
+      updateCommandStatus(commandObj.timestamp, 'completed', null);
     } else {
       console.error(`Unknown layer action: ${commandObj.action}`);
       updateCommandStatus(
         commandObj.timestamp,
-        "error",
+        'error',
         `Unknown action "${commandObj.action}". Try "show", "hide", or "toggle"`
       );
     }
@@ -497,10 +497,10 @@ function App() {
   const handleZoomCommand = (commandObj) => {
     if (!mapInstance) return;
 
-    if (commandObj.action === "in") {
+    if (commandObj.action === 'in') {
       const newZoom = Math.min(mapZoom + 1, 18);
       setMapZoom(newZoom);
-    } else if (commandObj.action === "out") {
+    } else if (commandObj.action === 'out') {
       const newZoom = Math.max(mapZoom - 1, 3);
       setMapZoom(newZoom);
     } else if (commandObj.level) {
@@ -628,33 +628,43 @@ function App() {
     }
   };
 
-  // Add this to your existing online/offline detection useEffect
+  // In App.js, add this effect hook:
   useEffect(() => {
-    function handleOnlineStatus() {
-      setIsOnline(navigator.onLine);
-      setShowOfflineNotification(!navigator.onLine);
-      
-      // If coming back online, sync any offline data
-      if (navigator.onLine) {
-        syncOfflineData();
-        scheduleOfflineDataRefresh(); // Add this line to schedule refresh
+    // Function to register background sync
+    const registerBackgroundSync = async () => {
+      if ('serviceWorker' in navigator && 'SyncManager' in window) {
+        try {
+          const registration = await navigator.serviceWorker.ready;
+          
+          // Register sync for searches
+          await registration.sync.register('sync-saved-searches');
+          
+          // Register sync for markers
+          await registration.sync.register('sync-offline-markers');
+          
+          // Register sync for offline data refresh
+          await registration.sync.register('refresh-offline-data');
+          
+          console.log('Background sync registered successfully');
+        } catch (error) {
+          console.error('Background sync registration failed:', error);
+          // Fallback to manual sync if registration fails
+          if (navigator.onLine) {
+            refreshOfflineDataManually();
+          }
+        }
+      } else {
+        console.log('Background sync not supported or offline');
+        // Fallback for browsers without Background Sync API
+        if (navigator.onLine) {
+          refreshOfflineDataManually();
+        }
       }
-    }
-    
-    window.addEventListener('online', handleOnlineStatus);
-    window.addEventListener('offline', handleOnlineStatus);
-    
-    // Initial status check
-    handleOnlineStatus();
-    
-    // Initial schedule when component mounts
-    scheduleOfflineDataRefresh();
-    
-    return () => {
-      window.removeEventListener('online', handleOnlineStatus);
-      window.removeEventListener('offline', handleOnlineStatus);
     };
-  }, [scheduleOfflineDataRefresh]);
+
+    // Register sync when component mounts
+    registerBackgroundSync();
+  }, []); // Empty dependency array means this runs once on mount
 
   // Display visual feedback for commands
   const showCommandFeedback = (message, status = "info") => {

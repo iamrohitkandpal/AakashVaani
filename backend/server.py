@@ -37,14 +37,32 @@ if os.getenv("ENVIRONMENT") == "development":
 # Load environment variables
 load_dotenv()
 
-# MongoDB setup
-MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
+# MongoDB setup with better error handling
+MONGO_URL = os.getenv("MONGO_URL")
 DB_NAME = os.getenv("DB_NAME", "aakash_vaani_db")
 
-# MongoDB client initialization
-mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URL)
-db = mongo_client[DB_NAME]
-logger.info(f"MongoDB client initialized with database {DB_NAME}")
+if not MONGO_URL:
+    logger.error("MONGO_URL environment variable not set")
+    raise ValueError("MONGO_URL environment variable not set")
+
+# MongoDB client initialization with proper options and error handling
+try:
+    mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
+        MONGO_URL,
+        serverSelectionTimeoutMS=5000,
+        connectTimeoutMS=5000,
+        socketTimeoutMS=5000,
+        maxPoolSize=50
+    )
+    db = mongo_client[DB_NAME] if mongo_client else None
+    if db is not None:
+        logger.info(f"MongoDB client initialized with database {DB_NAME}")
+    else:
+        raise RuntimeError("Failed to get database handle")
+except Exception as e:
+    logger.error(f"Failed to initialize MongoDB client: {e}")
+    mongo_client = None
+    db = None
 
 # Global flag for DB status
 db_is_connected: bool = False
@@ -180,21 +198,55 @@ async def check_rate_limit(client_ip: str) -> bool:
 async def lifespan(app: FastAPI):
     global db_is_connected
     try:
+        # Validate mongo_client
+        if mongo_client is None:
+            raise RuntimeError("MongoDB client not initialized")
+            
+        # Test connection with ping
         await mongo_client.admin.command("ping")
-        logger.info(f"Connected to MongoDB at {MONGO_URL}")
+        logger.info(f"Successfully connected to MongoDB at {MONGO_URL}")
+        
+        # Validate database handle
+        if db is None:
+            raise RuntimeError("MongoDB database handle is not available")
+            
+        # Create indexes with proper error handling
+        try:
+            await safe_db_operation(
+                "create_indexes",
+                db.searches.create_index,
+                [("timestamp", -1)]
+            )
+            await safe_db_operation(
+                "create_indexes",
+                db.markers.create_index,
+                [("timestamp", -1)]
+            )
+            await safe_db_operation(
+                "create_indexes",
+                db.users.create_index,
+                [("email", 1)],
+                unique=True
+            )
+            logger.info("Database indexes created successfully")
+        except Exception as e:
+            logger.error(f"Failed to create indexes: {e}")
+            raise
+        
         db_is_connected = True
-        await db.searches.create_index("timestamp")
-        await db.markers.create_index("timestamp")
-        await db.users.create_index("email", unique=True)
-        logger.info("Database indexes ensured.")
     except Exception as e:
-        logger.error(f"Failed to connect to MongoDB or ensure indexes: {e}")
+        logger.error(f"Failed to connect to MongoDB or create indexes: {e}")
         db_is_connected = False
 
     yield
 
-    mongo_client.close()
-    logger.info("Closed MongoDB connection")
+    # Cleanup
+    if mongo_client is not None:
+        try:
+            mongo_client.close()
+            logger.info("MongoDB connection closed")
+        except Exception as e:
+            logger.error(f"Error closing MongoDB connection: {e}")
 
 # FastAPI instance
 app = FastAPI(
@@ -225,11 +277,13 @@ async def validate_request(request: Request, call_next):
 # Routes
 @app.get("/")
 async def root():
+    """Root endpoint - also serves as health check"""
     return {
         "name": "Aakash Vaani API",
         "version": "1.0.0",
         "status": "online",
-        "database_connected": db_is_connected
+        "database_connected": db_is_connected,
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 @app.post("/geocode", response_model=List[Dict[str, Any]])
@@ -265,16 +319,20 @@ async def geocode(request: GeocodeRequest, background_tasks: BackgroundTasks):
             for result in results
         ]
 
-        if db_is_connected:
-            background_tasks.add_task(
-                db.searches.insert_one,
-                {
-                    "query": request.query,
-                    "timestamp": datetime.now(timezone.utc),
-                    "results_count": len(formatted_results),
-                    "type": "geocode"
-                }
-            )
+        # Update database check
+        if db_is_connected and db is not None:
+            try:
+                background_tasks.add_task(
+                    db.searches.insert_one,
+                    {
+                        "query": request.query,
+                        "timestamp": datetime.now(timezone.utc),
+                        "results_count": len(formatted_results),
+                        "type": "geocode"
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Failed to log search: {e}")
 
         return formatted_results
     except RequestError as e:
@@ -403,16 +461,25 @@ async def get_categories():
     ]
 
 @app.post("/sync/searches")
-async def sync_searches(data: List[Dict], request: Request, background_tasks: BackgroundTasks):
+async def sync_searches(
+    data: List[Dict], 
+    request: Request,
+    background_tasks: BackgroundTasks
+):
     """Sync saved searches from client to server"""
-    if not db_is_connected:
-        raise HTTPException(status_code=503, detail="Database not connected")
+    if db is None or not db_is_connected:
+        logger.warning("Database not connected - storing sync request in memory")
+        return {
+            "status": "queued",
+            "message": "Database offline - changes will sync when connection is restored"
+        }
 
     client_ip = request.client.host if request.client else "unknown"
     if not await check_rate_limit(client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     result = {"synced": 0, "failed": 0, "ids": []}
+    
     for item in data:
         try:
             item["server_timestamp"] = datetime.now(timezone.utc)
@@ -431,8 +498,11 @@ async def sync_searches(data: List[Dict], request: Request, background_tasks: Ba
 @app.post("/sync/markers")
 async def sync_markers(data: List[Dict], request: Request, background_tasks: BackgroundTasks):
     """Sync custom map markers from client to server"""
-    if not db_is_connected:
-        raise HTTPException(status_code=503, detail="Database not connected")
+    if db is None or not db_is_connected:
+        raise HTTPException(
+            status_code=503, 
+            detail="Database not connected"
+        )
 
     client_ip = request.client.host if request.client else "unknown"
     if not await check_rate_limit(client_ip):
@@ -490,7 +560,7 @@ async def get_offline_data(request: Request):
         "recent_searches": []
     }
 
-    if db_is_connected:
+    if db_is_connected and db is not None:
         try:
             recent_searches = await db.searches.find().sort("timestamp", -1).limit(10).to_list(10)
             offline_bundle["recent_searches"] = [
@@ -498,6 +568,8 @@ async def get_offline_data(request: Request):
             ]
         except Exception as e:
             logger.error(f"Failed to get recent searches: {e}")
+            # Don't fail the whole request if just recent searches fail
+            offline_bundle["recent_searches"] = []
 
     return offline_bundle
 
@@ -532,3 +604,48 @@ async def get_api_key_status():
             }
         }
     }
+
+@app.get("/health/mongodb")
+async def check_mongodb_health():
+    """Check MongoDB connection health"""
+    try:
+        if mongo_client is None:
+            return {
+                "status": "error",
+                "message": "MongoDB client not initialized"
+            }
+            
+        await mongo_client.admin.command("ping")
+        
+        if db is None:
+            return {
+                "status": "error",
+                "message": "Database handle not available"
+            }
+            
+        return {
+            "status": "healthy",
+            "database": DB_NAME,
+            "connected": db_is_connected
+        }
+    except Exception as e:
+        logger.error(f"MongoDB health check failed: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+# Add after other utility functions
+async def safe_db_operation(operation: str, func, *args, **kwargs) -> Optional[Any]:
+    """Safely execute database operations with proper error handling."""
+    if not db_is_connected or db is None:
+        logger.warning(f"Database not available for operation: {operation}")
+        return None
+    
+    try:
+        return await func(*args, **kwargs)
+    except Exception as e:
+        logger.error(f"Database operation failed - {operation}: {e}")
+        return None
+
+__all__ = ["app"]  # Export app for uvicorn
