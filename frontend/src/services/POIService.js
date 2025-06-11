@@ -327,3 +327,4 @@ class POIService {
 
 // Create and export singleton instance
 export const poiService = new POIService();
+export default POIService;

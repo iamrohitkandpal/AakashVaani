@@ -577,3 +577,4 @@ class WMSService {
 }
 
 export const wmsService = new WMSService();
+export { WMSService };
