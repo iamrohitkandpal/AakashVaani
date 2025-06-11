@@ -177,22 +177,16 @@ class VoiceRecognitionEngine {
     if (this.tfRecognizer) return true;
 
     try {
-      // Import the speech commands package
-      const speechCommands = await import("@tensorflow-models/speech-commands");
+      const recognizer = await modelDownloader.loadModel("speech-commands");
 
-      // Create the recognizer
-      this.tfRecognizer = speechCommands.create(
-        "BROWSER_FFT", // Using browser's native FFT
-        undefined, // No custom vocabulary
-        undefined, // Use default model URL
-        undefined // Use default metadata URL
-      );
+      // Add validation check
+      if (!recognizer || !recognizer.model || !recognizer.model.listen) {
+        console.error("Recognizer model not properly loaded");
+        return false;
+      }
 
-      // Load the model
-      await this.tfRecognizer.ensureModelLoaded();
-
-      // Get vocabulary from the model
-      this.tfVocabulary = this.tfRecognizer.wordLabels();
+      this.tfRecognizer = recognizer;
+      this.tfVocabulary = recognizer.wordLabels();
 
       console.log("TensorFlow.js speech model loaded successfully");
       console.log("Available commands:", this.tfVocabulary);

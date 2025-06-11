@@ -376,51 +376,66 @@ async function syncSavedSearches() {
     const dbName = 'aakash-vaani-offline';
     const storeName = 'saved-searches';
     
-    // Open database
-    const db = await openDB(dbName, 1);
-    
-    // Get unsynchronized items
-    const unsyncedItems = await db.getAll(storeName);
-    const itemsToSync = unsyncedItems.filter(item => !item.synced);
-    
-    console.log(`Found ${itemsToSync.length} searches to sync`);
-    
+    // Open database with enhanced openDB function
+    const db = await openDB(dbName, 1, (db) => {
+      // Create object store if it doesn't exist
+      if (!db.objectStoreNames.contains(storeName)) {
+        const store = db.createObjectStore(storeName, { keyPath: 'id' });
+        store.createIndex('timestamp', 'timestamp');
+        store.createIndex('synced', 'synced');
+      }
+    });
+
+    // Get unsynchronized items from object store
+    const transaction = db.transaction(storeName, 'readonly');
+    const store = transaction.objectStore(storeName);
+    const unsyncedItems = await store.index('synced').getAll(0); // Get items where synced = 0 or false
+
+    console.log(`Found ${unsyncedItems.length} searches to sync`);
+
     // Process each item
-    for (const item of itemsToSync) {
+    for (const item of unsyncedItems) {
       try {
         // Send to backend
-        const response = await fetch('/api/save-search', {
+        const response = await fetch('/api/sync/searches', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify(item)
         });
-        
+
         if (response.ok) {
           // Update sync status
+          const updateTx = db.transaction(storeName, 'readwrite');
+          const updateStore = updateTx.objectStore(storeName);
           item.synced = true;
-          await db.put(storeName, item);
+          await updateStore.put(item);
           console.log(`Successfully synced search: ${item.id}`);
+        } else {
+          console.error(`Failed to sync search ${item.id}: ${response.statusText}`);
         }
       } catch (error) {
         console.error(`Failed to sync search ${item.id}:`, error);
       }
     }
-    
+
     // Clean up old synced items
     const now = new Date();
-    const cutoffDate = new Date(now.setDate(now.getDate() - 7));
-    
-    const syncedItems = unsyncedItems.filter(item => item.synced);
-    for (const item of syncedItems) {
-      const itemDate = new Date(item.timestamp);
-      if (itemDate < cutoffDate) {
-        await db.delete(storeName, item.id);
+    const cutoffDate = new Date(now.setDate(now.getDate() - 7)); // 7 days old
+
+    const cleanupTx = db.transaction(storeName, 'readwrite');
+    const cleanupStore = cleanupTx.objectStore(storeName);
+    const oldItems = await cleanupStore.index('timestamp').getAll(IDBKeyRange.upperBound(cutoffDate));
+
+    for (const item of oldItems) {
+      if (item.synced) {
+        await cleanupStore.delete(item.id);
         console.log(`Deleted old search: ${item.id}`);
       }
     }
-    
+
+    await db.close();
     return true;
   } catch (error) {
     console.error('Error during saved searches sync:', error);
@@ -652,4 +667,47 @@ function getTileProvider(url) {
   }
   // Add more providers as needed
   return null;
+}
+
+// Enhanced openDB helper function
+async function openDB(name, version, upgradeCallback) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(name, version);
+
+    // Handle database upgrade/initialization
+    request.onupgradeneeded = (event) => {
+      if (upgradeCallback) {
+        upgradeCallback(event.target.result);
+      }
+    };
+
+    request.onsuccess = () => {
+      const db = request.result;
+      const wrappedDB = {
+        transaction: (storeName, mode) => db.transaction(storeName, mode),
+        close: () => db.close(),
+        objectStoreNames: db.objectStoreNames
+      };
+      resolve(wrappedDB);
+    };
+
+    request.onerror = () => {
+      reject(request.error);
+    };
+  });
+}
+
+// Add this function to check if database exists
+async function checkDatabaseExists(name) {
+  return new Promise((resolve) => {
+    const request = indexedDB.open(name);
+    request.onsuccess = () => {
+      const db = request.result;
+      db.close();
+      resolve(true);
+    };
+    request.onerror = () => {
+      resolve(false);
+    };
+  });
 }
